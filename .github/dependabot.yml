@@ -1,0 +1,33 @@
+version: 2
+updates:
+  # Keep the SHA-pinned CI actions current (Dependabot bumps both the SHA and the comment).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+
+  # Track the pinned Python deps in backend/pyproject.toml.
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+
+  # Track the frontend npm deps.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+
+  # Track the digest-pinned base images in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore

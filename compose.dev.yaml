@@ -1,0 +1,10 @@
+# Local development override — build from source instead of pulling the published image.
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build
+#
+# Not used in production; the deploy host runs the GHCR image from compose.yaml alone.
+services:
+  hearth:
+    build: .
+    image: hearth:dev
+    pull_policy: never

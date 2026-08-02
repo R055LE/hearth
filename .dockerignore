@@ -1,0 +1,27 @@
+# VCS / meta
+.git
+.gitignore
+.github
+
+# Never ship secrets into the image
+*.env
+!*.env.example
+
+# Runtime data + local dev
+data/
+backend/tests/
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Frontend dev artifacts (built separately in the image build stage)
+frontend/node_modules/
+
+# Compose/deploy tooling isn't needed inside the image
+compose.yaml
+compose.dev.yaml
+Dockerfile
+deploy/
