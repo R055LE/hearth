@@ -20,17 +20,97 @@ function roomWalls(room: Room): { from: [number, number]; to: [number, number] }
   }));
 }
 
-export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: () => void }) {
-  const [name, setName] = useState('');
-  const [floor, setFloor] = useState('main');
-  const [placementMode, setPlacementMode] = useState<'fresh' | 'anchor'>('fresh');
-  const [start, setStart] = useState<StartPoint>({ x: 0, y: 0, heading_deg: 0 });
-  const [anchorRoomId, setAnchorRoomId] = useState<number | ''>('');
-  const [anchorWallIndex, setAnchorWallIndex] = useState(0);
-  const [anchorCorner, setAnchorCorner] = useState<'start' | 'end'>('start');
-  const [anchorOffsetIn, setAnchorOffsetIn] = useState('0');
-  const [anchorHeadingDeg, setAnchorHeadingDeg] = useState(0);
-  const [walls, setWalls] = useState<Wall[]>([]);
+interface FormState {
+  name: string;
+  floor: string;
+  placementMode: 'fresh' | 'anchor';
+  start: StartPoint;
+  anchorRoomId: number | '';
+  anchorWallIndex: number;
+  anchorCorner: 'start' | 'end';
+  anchorOffsetIn: string;
+  anchorHeadingDeg: number;
+  walls: Wall[];
+  staleAnchorNotice: boolean;
+}
+
+function initialFormState(editingRoom: Room | null, allRooms: Room[]): FormState {
+  const base: FormState = {
+    name: '',
+    floor: 'main',
+    placementMode: 'fresh',
+    start: { x: 0, y: 0, heading_deg: 0 },
+    anchorRoomId: '',
+    anchorWallIndex: 0,
+    anchorCorner: 'start',
+    anchorOffsetIn: '0',
+    anchorHeadingDeg: 0,
+    walls: [],
+    staleAnchorNotice: false,
+  };
+  if (!editingRoom) return base;
+  const source = editingRoom.measurement_source;
+  const [fallbackX, fallbackY] = editingRoom.polygon[0] ?? [0, 0];
+  if (!source) {
+    return { ...base, name: editingRoom.name, floor: editingRoom.floor, start: { x: fallbackX, y: fallbackY, heading_deg: 0 } };
+  }
+  if (source.start.mode === 'absolute') {
+    return {
+      ...base,
+      name: editingRoom.name,
+      floor: editingRoom.floor,
+      start: { x: source.start.x, y: source.start.y, heading_deg: source.start.heading_deg },
+      walls: source.walls,
+    };
+  }
+  const anchorStart = source.start;
+  const anchorStillExists = allRooms.some((r) => r.id === anchorStart.anchor_room_id);
+  if (!anchorStillExists) {
+    return {
+      ...base,
+      name: editingRoom.name,
+      floor: editingRoom.floor,
+      start: { x: fallbackX, y: fallbackY, heading_deg: anchorStart.heading_deg },
+      walls: source.walls,
+      staleAnchorNotice: true,
+    };
+  }
+  return {
+    ...base,
+    name: editingRoom.name,
+    floor: editingRoom.floor,
+    placementMode: 'anchor',
+    anchorRoomId: anchorStart.anchor_room_id,
+    anchorWallIndex: anchorStart.wall_index,
+    anchorCorner: anchorStart.corner,
+    anchorOffsetIn: String(anchorStart.offset_in),
+    anchorHeadingDeg: anchorStart.heading_deg,
+    walls: source.walls,
+  };
+}
+
+export function RoomBuilder({
+  allRooms,
+  editingRoom = null,
+  onSaved,
+  onCancel,
+}: {
+  allRooms: Room[];
+  editingRoom?: Room | null;
+  onSaved: () => void;
+  onCancel?: () => void;
+}) {
+  const initial = initialFormState(editingRoom, allRooms);
+  const [name, setName] = useState(initial.name);
+  const [floor, setFloor] = useState(initial.floor);
+  const [placementMode, setPlacementMode] = useState<'fresh' | 'anchor'>(initial.placementMode);
+  const [start, setStart] = useState<StartPoint>(initial.start);
+  const [anchorRoomId, setAnchorRoomId] = useState<number | ''>(initial.anchorRoomId);
+  const [anchorWallIndex, setAnchorWallIndex] = useState(initial.anchorWallIndex);
+  const [anchorCorner, setAnchorCorner] = useState<'start' | 'end'>(initial.anchorCorner);
+  const [anchorOffsetIn, setAnchorOffsetIn] = useState(initial.anchorOffsetIn);
+  const [anchorHeadingDeg, setAnchorHeadingDeg] = useState(initial.anchorHeadingDeg);
+  const [walls, setWalls] = useState<Wall[]>(initial.walls);
   const [draftFeet, setDraftFeet] = useState('');
   const [draftInches, setDraftInches] = useState('');
   const [draftTurn, setDraftTurn] = useState<'left' | 'right' | 'straight' | 'custom'>('right');
@@ -148,9 +228,16 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
         : { mode: 'absolute', x: start.x, y: start.y, heading_deg: start.heading_deg };
     const measurement_source: MeasurementSource = { unit: 'ft_in', start: sourceStart, walls };
     try {
-      await api.rooms.create({ name, floor, polygon, measurement_source });
+      if (editingRoom) {
+        await api.rooms.update(editingRoom.id, { name, floor, polygon, measurement_source });
+      } else {
+        await api.rooms.create({ name, floor, polygon, measurement_source });
+      }
     } catch (err) {
-      setError('Failed to create room: ' + (err instanceof Error ? err.message : String(err)));
+      setError(
+        `Failed to ${editingRoom ? 'save' : 'create'} room: ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
       return;
     }
     setName('');
@@ -324,10 +411,20 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
           </p>
         </fieldset>
 
+        {initial.staleAnchorNotice && (
+          <p className="error">Original anchor room was deleted — placement reset to its last known position.</p>
+        )}
         {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={!closed}>
-          Create room
-        </button>
+        <div className="form-actions">
+          <button type="submit" disabled={!closed}>
+            {editingRoom ? 'Save room' : 'Create room'}
+          </button>
+          {onCancel && (
+            <button type="button" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
 
       <svg viewBox={`${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`} className="floorplan-svg">
