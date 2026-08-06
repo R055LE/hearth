@@ -86,7 +86,12 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
       start: { mode: 'absolute', x: start.x, y: start.y, heading_deg: start.heading_deg },
       walls,
     };
-    await api.rooms.create({ name, floor, polygon, measurement_source });
+    try {
+      await api.rooms.create({ name, floor, polygon, measurement_source });
+    } catch (err) {
+      setError('Failed to create room: ' + (err instanceof Error ? err.message : String(err)));
+      return;
+    }
     setName('');
     setWalls([]);
     setError(null);
