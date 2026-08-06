@@ -1,10 +1,28 @@
 export type Point = [number, number];
 
+import type { Turn } from './wallWalk';
+
+export interface MeasurementSource {
+  unit: 'ft_in';
+  start:
+    | { mode: 'absolute'; x: number; y: number; heading_deg: number }
+    | {
+        mode: 'anchor';
+        anchor_room_id: number;
+        wall_index: number;
+        corner: 'start' | 'end';
+        offset_in: number;
+        heading_deg: number;
+      };
+  walls: { length_in: number; turn: Turn }[];
+}
+
 export interface Room {
   id: number;
   name: string;
   floor: string;
   polygon: Point[];
+  measurement_source?: MeasurementSource | null;
 }
 
 export interface Panel {
