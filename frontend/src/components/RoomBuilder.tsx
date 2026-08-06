@@ -43,11 +43,16 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
     [roomsOnFloor, anchorRoomId],
   );
   const anchorWalls = useMemo(() => (anchorRoom ? roomWalls(anchorRoom) : []), [anchorRoom]);
+  // True only when the current anchor selection actually resolves to a real wall on a room
+  // that still exists — false if the room was deleted, or the wall index is left over from
+  // a different room's wall list after switching the Room dropdown. resolvedStart and submit()
+  // both key off this so they never disagree about what "anchored" means.
+  const anchorValid =
+    placementMode === 'anchor' && anchorRoom !== null && anchorWallIndex < anchorWalls.length;
 
   const resolvedStart = useMemo<StartPoint>(() => {
-    if (placementMode === 'fresh' || !anchorRoom) return start;
-    const wall = anchorWalls[anchorWallIndex] ?? anchorWalls[0];
-    if (!wall) return start;
+    if (!anchorValid || !anchorRoom) return start;
+    const wall = anchorWalls[anchorWallIndex];
     const [fromX, fromY] = anchorCorner === 'start' ? wall.from : wall.to;
     const [toX, toY] = anchorCorner === 'start' ? wall.to : wall.from;
     const dx = toX - fromX;
@@ -60,7 +65,7 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
       heading_deg: anchorHeadingDeg,
     };
   }, [
-    placementMode,
+    anchorValid,
     anchorRoom,
     anchorWalls,
     anchorWallIndex,
@@ -125,18 +130,22 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
       setError(`Shape doesn't close — off by ${(gap * 12).toFixed(1)}in. Adjust a wall length.`);
       return;
     }
+    if (placementMode === 'anchor' && !anchorValid) {
+      setError('Anchor room or wall is no longer valid — reselect a room and wall.');
+      return;
+    }
     const polygon = wallsToPolygon(resolvedStart, walls);
     const sourceStart: MeasurementSource['start'] =
-      placementMode === 'fresh' || anchorRoomId === ''
-        ? { mode: 'absolute', x: start.x, y: start.y, heading_deg: start.heading_deg }
-        : {
+      anchorValid && anchorRoom
+        ? {
             mode: 'anchor',
-            anchor_room_id: anchorRoomId,
+            anchor_room_id: anchorRoom.id,
             wall_index: anchorWallIndex,
             corner: anchorCorner,
             offset_in: Number(anchorOffsetIn) || 0,
             heading_deg: anchorHeadingDeg,
-          };
+          }
+        : { mode: 'absolute', x: start.x, y: start.y, heading_deg: start.heading_deg };
     const measurement_source: MeasurementSource = { unit: 'ft_in', start: sourceStart, walls };
     try {
       await api.rooms.create({ name, floor, polygon, measurement_source });
