@@ -7,6 +7,7 @@ class RoomBase(BaseModel):
     name: str
     floor: str
     polygon: list[Point]
+    measurement_source: dict | None = None
 
 
 class RoomCreate(RoomBase):
@@ -17,6 +18,7 @@ class RoomUpdate(BaseModel):
     name: str | None = None
     floor: str | None = None
     polygon: list[Point] | None = None
+    measurement_source: dict | None = None
 
 
 class RoomRead(RoomBase):
