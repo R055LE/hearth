@@ -43,6 +43,11 @@
   stroke-width: 0.3;
 }
 
+.anchor-room {
+  stroke: #f97316;
+  stroke-width: 0.6;
+}
+
 .room-label {
   font-size: 3px;
   fill: #333;

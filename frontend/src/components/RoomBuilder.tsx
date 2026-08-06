@@ -13,10 +13,23 @@ const HEADINGS: { label: string; deg: number }[] = [
   { label: '→', deg: 0 },
 ];
 
+function roomWalls(room: Room): { from: [number, number]; to: [number, number] }[] {
+  return room.polygon.map((from, i) => ({
+    from,
+    to: room.polygon[(i + 1) % room.polygon.length],
+  }));
+}
+
 export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: () => void }) {
   const [name, setName] = useState('');
   const [floor, setFloor] = useState('main');
+  const [placementMode, setPlacementMode] = useState<'fresh' | 'anchor'>('fresh');
   const [start, setStart] = useState<StartPoint>({ x: 0, y: 0, heading_deg: 0 });
+  const [anchorRoomId, setAnchorRoomId] = useState<number | ''>('');
+  const [anchorWallIndex, setAnchorWallIndex] = useState(0);
+  const [anchorCorner, setAnchorCorner] = useState<'start' | 'end'>('start');
+  const [anchorOffsetIn, setAnchorOffsetIn] = useState('0');
+  const [anchorHeadingDeg, setAnchorHeadingDeg] = useState(0);
   const [walls, setWalls] = useState<Wall[]>([]);
   const [draftFeet, setDraftFeet] = useState('');
   const [draftInches, setDraftInches] = useState('');
@@ -25,8 +38,40 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
   const [error, setError] = useState<string | null>(null);
 
   const roomsOnFloor = useMemo(() => allRooms.filter((r) => r.floor === floor), [allRooms, floor]);
-  const vertices = useMemo(() => wallsToVertices(start, walls), [start, walls]);
-  const gap = useMemo(() => closureGapFt(start, walls), [start, walls]);
+  const anchorRoom = useMemo(
+    () => roomsOnFloor.find((r) => r.id === anchorRoomId) ?? null,
+    [roomsOnFloor, anchorRoomId],
+  );
+  const anchorWalls = useMemo(() => (anchorRoom ? roomWalls(anchorRoom) : []), [anchorRoom]);
+
+  const resolvedStart = useMemo<StartPoint>(() => {
+    if (placementMode === 'fresh' || !anchorRoom) return start;
+    const wall = anchorWalls[anchorWallIndex] ?? anchorWalls[0];
+    if (!wall) return start;
+    const [fromX, fromY] = anchorCorner === 'start' ? wall.from : wall.to;
+    const [toX, toY] = anchorCorner === 'start' ? wall.to : wall.from;
+    const dx = toX - fromX;
+    const dy = toY - fromY;
+    const wallLen = Math.hypot(dx, dy) || 1;
+    const offsetFt = (Number(anchorOffsetIn) || 0) / 12;
+    return {
+      x: fromX + (dx / wallLen) * offsetFt,
+      y: fromY + (dy / wallLen) * offsetFt,
+      heading_deg: anchorHeadingDeg,
+    };
+  }, [
+    placementMode,
+    anchorRoom,
+    anchorWalls,
+    anchorWallIndex,
+    anchorCorner,
+    anchorOffsetIn,
+    anchorHeadingDeg,
+    start,
+  ]);
+
+  const vertices = useMemo(() => wallsToVertices(resolvedStart, walls), [resolvedStart, walls]);
+  const gap = useMemo(() => closureGapFt(resolvedStart, walls), [resolvedStart, walls]);
   const closed = walls.length >= 3 && gap <= CLOSURE_EPSILON_FT;
 
   const bounds = useMemo(() => {
@@ -80,12 +125,19 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
       setError(`Shape doesn't close — off by ${(gap * 12).toFixed(1)}in. Adjust a wall length.`);
       return;
     }
-    const polygon = wallsToPolygon(start, walls);
-    const measurement_source: MeasurementSource = {
-      unit: 'ft_in',
-      start: { mode: 'absolute', x: start.x, y: start.y, heading_deg: start.heading_deg },
-      walls,
-    };
+    const polygon = wallsToPolygon(resolvedStart, walls);
+    const sourceStart: MeasurementSource['start'] =
+      placementMode === 'fresh' || anchorRoomId === ''
+        ? { mode: 'absolute', x: start.x, y: start.y, heading_deg: start.heading_deg }
+        : {
+            mode: 'anchor',
+            anchor_room_id: anchorRoomId,
+            wall_index: anchorWallIndex,
+            corner: anchorCorner,
+            offset_in: Number(anchorOffsetIn) || 0,
+            heading_deg: anchorHeadingDeg,
+          };
+    const measurement_source: MeasurementSource = { unit: 'ft_in', start: sourceStart, walls };
     try {
       await api.rooms.create({ name, floor, polygon, measurement_source });
     } catch (err) {
@@ -109,35 +161,105 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
         </label>
 
         <fieldset>
-          <legend>Start point</legend>
+          <legend>Placement</legend>
           <label>
-            X (ft):{' '}
-            <input
-              type="number"
-              value={start.x}
-              onChange={(e) => setStart((s) => ({ ...s, x: Number(e.target.value) }))}
-            />
+            <input type="radio" checked={placementMode === 'fresh'} onChange={() => setPlacementMode('fresh')} />
+            Start fresh
           </label>
-          <label>
-            Y (ft):{' '}
-            <input
-              type="number"
-              value={start.y}
-              onChange={(e) => setStart((s) => ({ ...s, y: Number(e.target.value) }))}
-            />
-          </label>
-          <div className="heading-buttons">
-            {HEADINGS.map((h) => (
-              <button
-                key={h.deg}
-                type="button"
-                className={start.heading_deg === h.deg ? 'active' : ''}
-                onClick={() => setStart((s) => ({ ...s, heading_deg: h.deg }))}
-              >
-                {h.label}
-              </button>
-            ))}
-          </div>
+          {roomsOnFloor.length > 0 && (
+            <label>
+              <input
+                type="radio"
+                checked={placementMode === 'anchor'}
+                onChange={() => setPlacementMode('anchor')}
+              />
+              Attach to existing room
+            </label>
+          )}
+
+          {placementMode === 'fresh' ? (
+            <>
+              <label>
+                X (ft):{' '}
+                <input
+                  type="number"
+                  value={start.x}
+                  onChange={(e) => setStart((s) => ({ ...s, x: Number(e.target.value) }))}
+                />
+              </label>
+              <label>
+                Y (ft):{' '}
+                <input
+                  type="number"
+                  value={start.y}
+                  onChange={(e) => setStart((s) => ({ ...s, y: Number(e.target.value) }))}
+                />
+              </label>
+              <div className="heading-buttons">
+                {HEADINGS.map((h) => (
+                  <button
+                    key={h.deg}
+                    type="button"
+                    className={start.heading_deg === h.deg ? 'active' : ''}
+                    onClick={() => setStart((s) => ({ ...s, heading_deg: h.deg }))}
+                  >
+                    {h.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <label>
+                Room:{' '}
+                <select value={anchorRoomId} onChange={(e) => setAnchorRoomId(Number(e.target.value))}>
+                  <option value="" disabled>
+                    Select a room
+                  </option>
+                  {roomsOnFloor.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {anchorRoom && (
+                <label>
+                  Wall:{' '}
+                  <select value={anchorWallIndex} onChange={(e) => setAnchorWallIndex(Number(e.target.value))}>
+                    {anchorWalls.map((w, i) => (
+                      <option key={i} value={i}>
+                        Wall {i + 1}: ({w.from[0]}, {w.from[1]}) → ({w.to[0]}, {w.to[1]})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label>
+                Corner:{' '}
+                <select value={anchorCorner} onChange={(e) => setAnchorCorner(e.target.value as 'start' | 'end')}>
+                  <option value="start">Wall start</option>
+                  <option value="end">Wall end</option>
+                </select>
+              </label>
+              <label>
+                Offset (in):{' '}
+                <input type="number" value={anchorOffsetIn} onChange={(e) => setAnchorOffsetIn(e.target.value)} />
+              </label>
+              <div className="heading-buttons">
+                {HEADINGS.map((h) => (
+                  <button
+                    key={h.deg}
+                    type="button"
+                    className={anchorHeadingDeg === h.deg ? 'active' : ''}
+                    onClick={() => setAnchorHeadingDeg(h.deg)}
+                  >
+                    {h.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </fieldset>
 
         <fieldset>
@@ -204,7 +326,7 @@ export function RoomBuilder({ allRooms, onSaved }: { allRooms: Room[]; onSaved: 
           <polygon
             key={room.id}
             points={room.polygon.map(([x, y]) => `${x},${y}`).join(' ')}
-            className="room-polygon"
+            className={room.id === anchorRoomId ? 'room-polygon anchor-room' : 'room-polygon'}
           />
         ))}
         {vertices.length > 1 && (
