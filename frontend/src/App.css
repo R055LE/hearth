@@ -114,3 +114,31 @@
 .error {
   color: #dc2626;
 }
+
+.room-builder {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.heading-buttons {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.heading-buttons button.active {
+  font-weight: bold;
+  color: #f97316;
+}
+
+.wall-list {
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 0.5rem;
+}
+
+.draft-room-outline {
+  fill: none;
+  stroke: #f97316;
+  stroke-width: 0.4;
+}
