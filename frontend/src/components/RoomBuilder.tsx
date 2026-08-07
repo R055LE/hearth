@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { closureGapFt, wallsToPolygon, wallsToVertices } from '../wallWalk';
 import type { StartPoint, Turn, Wall } from '../wallWalk';
@@ -116,11 +116,29 @@ export function RoomBuilder({
   const [draftTurn, setDraftTurn] = useState<'left' | 'right' | 'straight' | 'custom'>('right');
   const [draftCustomDeg, setDraftCustomDeg] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Frozen at mount, not recomputed from `initial` on every render — `initial` is recomputed
+  // live off `allRooms`, but this notice describes what the form was seeded with, which only
+  // happens once (see the useState initializers above).
+  const [staleAnchorNotice] = useState(initial.staleAnchorNotice);
+  const [circuitPointCount, setCircuitPointCount] = useState(0);
+
+  useEffect(() => {
+    if (!editingRoom) return;
+    api.floorplan.get(editingRoom.floor).then((fp) => {
+      setCircuitPointCount(fp.circuit_points.filter((p) => p.room_id === editingRoom.id).length);
+    });
+  }, [editingRoom]);
 
   const roomsOnFloor = useMemo(() => allRooms.filter((r) => r.floor === floor), [allRooms, floor]);
+  // Excludes editingRoom itself — anchoring a room to its own previous save would recompute its
+  // start point from the polygon each save just wrote, walking the room across the floor.
+  const anchorableRooms = useMemo(
+    () => roomsOnFloor.filter((r) => r.id !== editingRoom?.id),
+    [roomsOnFloor, editingRoom],
+  );
   const anchorRoom = useMemo(
-    () => roomsOnFloor.find((r) => r.id === anchorRoomId) ?? null,
-    [roomsOnFloor, anchorRoomId],
+    () => anchorableRooms.find((r) => r.id === anchorRoomId) ?? null,
+    [anchorableRooms, anchorRoomId],
   );
   const anchorWalls = useMemo(() => (anchorRoom ? roomWalls(anchorRoom) : []), [anchorRoom]);
   // True only when the current anchor selection actually resolves to a real wall on a room
@@ -256,13 +274,20 @@ export function RoomBuilder({
           Floor: <input value={floor} onChange={(e) => setFloor(e.target.value)} required />
         </label>
 
+        {circuitPointCount > 0 && (
+          <p>
+            This room has {circuitPointCount} circuit point(s) that won't move if you reshape it — you may
+            need to reposition them afterward in the Floorplan tab.
+          </p>
+        )}
+
         <fieldset>
           <legend>Placement</legend>
           <label>
             <input type="radio" checked={placementMode === 'fresh'} onChange={() => setPlacementMode('fresh')} />
             Start fresh
           </label>
-          {roomsOnFloor.length > 0 && (
+          {anchorableRooms.length > 0 && (
             <label>
               <input
                 type="radio"
@@ -312,7 +337,7 @@ export function RoomBuilder({
                   <option value="" disabled>
                     Select a room
                   </option>
-                  {roomsOnFloor.map((r) => (
+                  {anchorableRooms.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.name}
                     </option>
@@ -411,12 +436,12 @@ export function RoomBuilder({
           </p>
         </fieldset>
 
-        {initial.staleAnchorNotice && (
+        {staleAnchorNotice && (
           <p className="error">Original anchor room was deleted — placement reset to its last known position.</p>
         )}
         {error && <p className="error">{error}</p>}
         <div className="form-actions">
-          <button type="submit" disabled={!closed}>
+          <button type="submit" disabled={!closed || (placementMode === 'anchor' && !anchorValid)}>
             {editingRoom ? 'Save room' : 'Create room'}
           </button>
           {onCancel && (
