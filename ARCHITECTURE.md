@@ -75,5 +75,5 @@ during setup; `README.md` calls it out so it doesn't bite again.
 - Auth (single-user login or tighter tailnet-exposure hardening) — flagged by Ross
   as something to revisit, so nothing here hardcodes a single-implicit-user
   assumption that would make adding it later awkward.
-- GHCR publish workflow + systemd-timer deploy to the actual host (roger's pattern)
-  — deliberately not wired up yet; this repo only covers the app itself.
+- ~~GHCR publish workflow + systemd-timer deploy to the actual host~~ — done, see
+  `deploy/README.md`.

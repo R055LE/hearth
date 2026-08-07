@@ -1,0 +1,12 @@
+[Unit]
+Description=Pull and (re)deploy hearth from GHCR
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=__DEPLOY_USER__
+ExecStart=/usr/local/bin/hearth-deploy
+# Non-fatal: a failed poll (e.g. registry hiccup) shouldn't disable the timer.
+SuccessExitStatus=0
