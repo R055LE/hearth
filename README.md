@@ -71,5 +71,5 @@ so before the *first* `up`, chown the bind-mounted data directory to match:
 "unable to open database file".
 
 No auth in this phase — intended for tailnet/home-network access only, same
-trust model as other self-hosted services here. CI/CD (GHCR publish + host
-deploy) isn't wired up yet.
+trust model as other self-hosted services here. See `deploy/README.md` for
+the GHCR publish + host deploy pipeline.
