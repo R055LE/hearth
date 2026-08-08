@@ -7,7 +7,7 @@ RUN npm ci
 COPY frontend ./
 RUN npm run build
 
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+FROM python:3.14-slim@sha256:a7fb1e634c4a578f9e0bd6327f11a3cde11b7a9395f48e24360c0988bcc5c2bc
 
 # Non-root runtime user with a fixed uid/gid so the host can chown the bind-mounted /data
 # to match. The app writes only to /data (volume), so the rootfs is read-only.
