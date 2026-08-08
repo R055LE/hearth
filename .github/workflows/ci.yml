@@ -15,8 +15,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The versions come out of the Dockerfile rather than being written here, because the
+  # runtime that ships is the only one worth testing. Hardcoding them means a base-image
+  # bump silently moves what ships without moving what's tested, and the tests stay green
+  # the whole time. Deriving them means a bump can't land without being exercised first.
+  runtimes:
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.parse.outputs.python }}
+      node: ${{ steps.parse.outputs.node }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: parse
+        run: |
+          # head -1: sed prints one line per match, and a second matching FROM would
+          # otherwise write a multi-line value into GITHUB_OUTPUT, which is an output
+          # injection. Fork PRs run this workflow, so the Dockerfile is untrusted input.
+          python=$(sed -n 's/^FROM python:\([0-9.]*\)-slim.*/\1/p' Dockerfile | head -1)
+          node=$(sed -n 's/^FROM node:\([0-9]*\)-slim.*/\1/p' Dockerfile | head -1)
+          # Fail loudly on anything unexpected. A silent empty version would hand
+          # setup-python an empty string and let it pick its own default, which is the
+          # exact drift this exists to prevent, wearing a green tick.
+          if ! printf '%s' "$python" | grep -qE '^[0-9]+\.[0-9]+$' \
+             || ! printf '%s' "$node" | grep -qE '^[0-9]+$'; then
+            echo "::error::could not parse runtime versions from Dockerfile (python='$python' node='$node')"
+            grep '^FROM' Dockerfile
+            exit 1
+          fi
+          echo "python=$python" >> "$GITHUB_OUTPUT"
+          echo "node=$node" >> "$GITHUB_OUTPUT"
+          echo "Testing against python $python, node $node (from Dockerfile)" >> "$GITHUB_STEP_SUMMARY"
+
   backend:
     runs-on: ubuntu-latest
+    needs: runtimes
     defaults:
       run:
         working-directory: backend
@@ -24,7 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: ${{ needs.runtimes.outputs.python }}
           cache: pip
           cache-dependency-path: backend/pyproject.toml
       - name: Install (with dev deps)
@@ -36,6 +68,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    needs: runtimes
     defaults:
       run:
         working-directory: frontend
@@ -43,7 +76,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: "22"
+          node-version: ${{ needs.runtimes.outputs.node }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
