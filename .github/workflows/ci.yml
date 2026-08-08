@@ -5,6 +5,26 @@ name: ci
 on:
   push:
     branches: [main]
+    # A docs-only merge can't change runtime behaviour, so skip the rebuild and the
+    # redeploy that follows it. The filter lives here rather than on release.yml
+    # because release triggers on `workflow_run` of this workflow, and workflow_run
+    # supports only workflows/types/branches/branches-ignore. It has no path filters,
+    # so the only way to stop the release is to stop this run from happening.
+    #
+    # Two consequences worth knowing. A docs-only push to main produces no ci run at
+    # all, so main shows no check for that commit. And `backend/README.md` is COPY'd
+    # into the image for the package metadata, so editing only that file leaves the
+    # published image holding the old copy until the next code change rebuilds. It's
+    # metadata that nothing reads at runtime, so this is accepted rather than worked
+    # around: paths-ignore has no negation, and the alternative is an explicit
+    # `paths` allowlist that silently stops building when someone adds a directory.
+    #
+    # Mixed code+docs pushes still build, because paths-ignore only skips when every
+    # changed path matches.
+    paths-ignore:
+      - "**.md"
+  # Deliberately unfiltered. Every PR gets the full check regardless of what it
+  # touches, so "is this mergeable" never depends on guessing what changed.
   pull_request:
 
 permissions:
