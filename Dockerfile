@@ -21,7 +21,12 @@ COPY backend/pyproject.toml backend/README.md ./
 COPY backend/hearth ./hearth
 COPY backend/alembic.ini ./alembic.ini
 COPY backend/alembic ./alembic
-RUN pip install --no-cache-dir .
+# pip is a build-time tool here; nothing at runtime shells out to it. Removing it after the
+# install drops pip's vendored bundle from the shipped image, along with the CycloneDX SBOM
+# pip publishes about that bundle. Trivy reads that SBOM as installed inventory, so it was
+# reporting vendored packages the image doesn't expose as if they were app dependencies.
+RUN pip install --no-cache-dir . \
+ && python -m pip uninstall -y pip
 
 COPY --from=frontend-build /app/dist ./static
 
