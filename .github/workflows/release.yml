@@ -73,12 +73,34 @@ jobs:
           echo "name=$repo" >> "$GITHUB_OUTPUT"
           echo "ref=$repo:main" >> "$GITHUB_OUTPUT"
 
-      - name: Scan image (Trivy)
+      # Two scans on purpose: one reports, one blocks. Per runbook decisions/0011,
+      # everything stays visible and only a subset gates.
+      #
+      # `ignore-unfixed` used to be set on the single gating scan, which meant
+      # unfixable findings were filtered out of the *output*, not just excused
+      # from blocking. This image was reporting a clean scan while carrying 23
+      # CRITICAL/HIGH findings, 4 of them CRITICAL in perl-base. The gate wasn't
+      # wrong about what it blocked on. It was silent about everything else.
+      - name: Report all findings (does not block)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ steps.img.outputs.ref }}
           severity: CRITICAL,HIGH
-          ignore-unfixed: true # only fixable vulns block a release
+          exit-code: "0"
+
+      # Interim blocking rule, unchanged in behaviour from before: a release is
+      # blocked by anything with a fix available. decisions/0011 replaces this
+      # with KEV/EPSS plus an age SLA once that tooling exists; until then this
+      # keeps a live service deployable while the step above keeps the unfixable
+      # findings on screen instead of hidden. The known ones are recorded in
+      # docs/known-findings.md, and the real remedy is a base image that doesn't
+      # ship perl and util-linux at all.
+      - name: Gate on fixable findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.img.outputs.ref }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
           exit-code: "1"
 
       # Cache-hit rebuild (same inputs) that pushes with attestations only after the scan passes.

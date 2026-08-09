@@ -17,6 +17,12 @@ Two things gate it, and both matter:
 - It builds, **scans with Trivy, and only then pushes**, so a vulnerable image
   never reaches GHCR. The scan is the last thing standing between a merge and
   the host.
+- **Two scans, one blocking.** Per runbook `decisions/0011` everything the
+  scanner finds is printed and only findings with a fix available block the
+  release. The unfixable ones are recorded in `docs/known-findings.md`, not
+  hidden. Before 2026-08-08 a single scan used `ignore-unfixed: true`, which
+  filtered them out of the output entirely, so the workflow reported clean
+  while the image carried 23 CRITICAL/HIGH findings.
 
 **The Trivy gate does not run on pull requests.** A PR can be green on all
 three checks and still fail the release. That happened on 2026-08-08: the
