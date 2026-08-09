@@ -43,10 +43,10 @@ Run from a checkout, against a host you can reach over SSH. Set `HOST` to that h
 ```bash
 HOST=your-deploy-host
 
-# 1. Provision the deploy dir. 10001 matches the image's runtime uid (see ../Dockerfile) so
+# 1. Provision the deploy dir. 65532 matches the image's runtime uid (see ../Dockerfile) so
 #    the read-only container can write the SQLite DB into the bind mount.
 ssh "$HOST" 'sudo install -d -o "$USER" -g "$USER" /opt/hearth && \
-             sudo install -d /opt/hearth/data && sudo chown 10001:10001 /opt/hearth/data'
+             sudo install -d /opt/hearth/data && sudo chown 65532:65532 /opt/hearth/data'
 scp ../compose.yaml "$HOST":/opt/hearth/
 
 # 2. Install the deploy timer (must run via sudo so it picks up the deploy user).
@@ -61,6 +61,25 @@ ssh "$HOST" 'docker logs --tail 20 "$(docker ps -q --filter name=hearth)"'
 > **One-time GHCR step:** the first `release.yml` run publishes the package **private** by
 > default. Make it public once in the package's settings → *Change visibility → Public*, so the
 > host can pull without a token. After that, nothing else is manual.
+
+## Upgrading an existing deploy to the distroless image
+
+The runtime uid changed from `10001` to `65532` when the final stage moved to
+distroless, because that image has no `useradd` and ships its own `nonroot` user.
+An existing `/opt/hearth/data` is chowned to the old uid, so **the chown has to
+happen or the container cannot open its database.**
+
+```bash
+ssh "$HOST" 'sudo systemctl stop hearth-deploy.timer && \
+             sudo chown -R 65532:65532 /opt/hearth/data && \
+             sudo systemctl start hearth-deploy.timer'
+```
+
+It fails loudly rather than quietly, which is worth knowing before you do it. On
+a directory the runtime user cannot write, the container exits 1 during
+migrations with `sqlite3.OperationalError: unable to open database file`. There
+is no state where it starts and serves with a database it cannot write, so a
+missed chown costs a restart, not data.
 
 ## Day-to-day
 
