@@ -78,13 +78,17 @@ jobs:
         with:
           python-version: ${{ needs.runtimes.outputs.python }}
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
-      - name: Install (with dev deps)
-        run: pip install -e '.[dev]'
+          cache-dependency-path: |
+            backend/requirements-uv.txt
+            backend/uv.lock
+      - name: Install uv
+        run: pip install --requirement requirements-uv.txt
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
       - name: Lint
-        run: ruff check .
+        run: uv run --frozen ruff check .
       - name: Test
-        run: pytest --cov=hearth --cov-report=term-missing
+        run: uv run --frozen pytest --cov=hearth --cov-report=term-missing
 
   frontend:
     runs-on: ubuntu-latest

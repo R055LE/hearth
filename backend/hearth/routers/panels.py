@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from hearth import models, schemas
 from hearth.database import get_db
+from hearth.routers._database import commit_or_conflict
 
 router = APIRouter(prefix="/panels", tags=["panels"])
 
@@ -16,7 +17,7 @@ def list_panels(db: Session = Depends(get_db)):
 def create_panel(panel: schemas.PanelCreate, db: Session = Depends(get_db)):
     db_panel = models.Panel(**panel.model_dump())
     db.add(db_panel)
-    db.commit()
+    commit_or_conflict(db, "Panel references a missing room or upstream panel")
     db.refresh(db_panel)
     return db_panel
 
@@ -36,7 +37,7 @@ def update_panel(panel_id: int, panel: schemas.PanelUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="Panel not found")
     for field, value in panel.model_dump(exclude_unset=True).items():
         setattr(db_panel, field, value)
-    db.commit()
+    commit_or_conflict(db, "Panel references a missing room or upstream panel")
     db.refresh(db_panel)
     return db_panel
 
@@ -46,8 +47,10 @@ def delete_panel(panel_id: int, db: Session = Depends(get_db)):
     db_panel = db.get(models.Panel, panel_id)
     if db_panel is None:
         raise HTTPException(status_code=404, detail="Panel not found")
+    if db.query(models.Panel).filter(models.Panel.fed_from_panel_id == panel_id).first():
+        raise HTTPException(status_code=409, detail="Panel still feeds another panel")
     db.delete(db_panel)
-    db.commit()
+    commit_or_conflict(db, "Panel is still referenced")
 
 
 @router.get("/{panel_id}/circuits", response_model=list[schemas.CircuitRead])

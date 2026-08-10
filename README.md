@@ -23,7 +23,8 @@ Backend (needs [uv](https://docs.astral.sh/uv/)):
 
 ```
 cd backend
-uv sync --extra dev
+mkdir -p data
+uv sync --frozen --extra dev
 uv run alembic upgrade head
 uv run uvicorn hearth.main:app --reload --port 8000
 ```
@@ -32,7 +33,7 @@ Frontend, in another terminal:
 
 ```
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -65,9 +66,10 @@ migrations on container start, and serves both from one port (default 8000).
 `ghcr.io/r055le/hearth:main` image instead of building locally — that's what
 the deploy host runs.
 
-The container runs as a non-root user (uid/gid `10001`) with a read-only rootfs,
-so before the *first* `up`, chown the bind-mounted data directory to match:
-`sudo chown 10001:10001 data`. Skipping this crash-loops the container on
+The container runs as the distroless `nonroot` user (uid/gid `65532`) with a
+read-only rootfs, so before the *first* `up`, create and chown the bind-mounted
+data directory to match: `mkdir -p data && sudo chown 65532:65532 data`.
+Skipping this crash-loops the container on
 "unable to open database file".
 
 No auth in this phase — intended for tailnet/home-network access only, same

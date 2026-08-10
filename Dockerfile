@@ -17,13 +17,14 @@ RUN npm run build
 FROM python:3.13-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6 AS builder
 WORKDIR /build
 
-# Install into a prefix that can be copied wholesale into the final stage. pip stays
-# in this stage: it was uninstalled from the old runtime image to drop its vendored
-# bundle and the CycloneDX SBOM Trivy reads as installed inventory. Distroless has no
-# pip at all, so that problem goes away rather than needing the workaround.
-COPY backend/pyproject.toml backend/README.md ./
+# Install the dependency set recorded in uv.lock into a prefix that can be copied
+# wholesale into the final stage. Resolving pyproject ranges independently here made
+# the committed lockfile decorative and allowed repeat builds of one commit to differ.
+COPY backend/requirements-uv.txt ./requirements-uv.txt
+RUN pip install --no-cache-dir --requirement requirements-uv.txt
+COPY backend/pyproject.toml backend/uv.lock backend/README.md ./
 COPY backend/hearth ./hearth
-RUN pip install --no-cache-dir --prefix=/install .
+RUN UV_PROJECT_ENVIRONMENT=/install uv sync --frozen --no-dev --no-editable
 
 # /data has to exist in the image with the right ownership before the bind mount lands.
 # There is no shell in the final stage to mkdir with, so it gets built here and copied.

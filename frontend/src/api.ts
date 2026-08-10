@@ -6,7 +6,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
   });
   if (!res.ok) {
-    throw new Error(`${options?.method ?? 'GET'} ${path} failed: ${res.status}`);
+    let detail = '';
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      if (typeof body.detail === 'string') detail = `: ${body.detail}`;
+    } catch {
+      // The status still gives a useful error when the response is not JSON.
+    }
+    throw new Error(`${options?.method ?? 'GET'} ${path} failed: ${res.status}${detail}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
