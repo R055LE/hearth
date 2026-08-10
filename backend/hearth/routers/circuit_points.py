@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from hearth import models, schemas
 from hearth.database import get_db
+from hearth.routers._database import commit_or_conflict
 
 router = APIRouter(prefix="/circuit-points", tags=["circuit-points"])
 
@@ -16,7 +17,7 @@ def list_circuit_points(db: Session = Depends(get_db)):
 def create_circuit_point(point: schemas.CircuitPointCreate, db: Session = Depends(get_db)):
     db_point = models.CircuitPoint(**point.model_dump())
     db.add(db_point)
-    db.commit()
+    commit_or_conflict(db, "Circuit point references a missing circuit or room")
     db.refresh(db_point)
     return db_point
 
@@ -38,7 +39,7 @@ def update_circuit_point(
         raise HTTPException(status_code=404, detail="Circuit point not found")
     for field, value in point.model_dump(exclude_unset=True).items():
         setattr(db_point, field, value)
-    db.commit()
+    commit_or_conflict(db, "Circuit point references a missing circuit or room")
     db.refresh(db_point)
     return db_point
 
@@ -49,4 +50,4 @@ def delete_circuit_point(point_id: int, db: Session = Depends(get_db)):
     if db_point is None:
         raise HTTPException(status_code=404, detail="Circuit point not found")
     db.delete(db_point)
-    db.commit()
+    commit_or_conflict(db, "Circuit point could not be deleted")

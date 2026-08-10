@@ -126,7 +126,7 @@ export function RoomBuilder({
     if (!editingRoom) return;
     api.floorplan.get(editingRoom.floor).then((fp) => {
       setCircuitPointCount(fp.circuit_points.filter((p) => p.room_id === editingRoom.id).length);
-    });
+    }).catch((err) => setError(String(err)));
   }, [editingRoom]);
 
   const roomsOnFloor = useMemo(() => allRooms.filter((r) => r.floor === floor), [allRooms, floor]);

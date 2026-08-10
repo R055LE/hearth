@@ -40,6 +40,7 @@ export function FloorplanView() {
   const [selectedCircuitId, setSelectedCircuitId] = useState<number | null>(null);
   const [addMode, setAddMode] = useState(false);
   const [draftPoint, setDraftPoint] = useState<{ x: number; y: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   const floors = useMemo(
@@ -48,25 +49,38 @@ export function FloorplanView() {
   );
 
   useEffect(() => {
-    Promise.all([api.rooms.list(), api.panels.list(), api.circuits.list()]).then(
-      ([rooms, panelList, circuitList]) => {
+    Promise.all([api.rooms.list(), api.panels.list(), api.circuits.list()])
+      .then(([rooms, panelList, circuitList]) => {
         setAllRooms(rooms);
         setPanels(panelList);
         setCircuits(circuitList);
+        setError(null);
         if (!floor && rooms.length > 0) setFloor(rooms[0].floor);
-      },
-    );
+      })
+      .catch((err) => setError(String(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!floor) return;
-    api.floorplan.get(floor).then(setPlan);
+    api.floorplan
+      .get(floor)
+      .then((floorplan) => {
+        setPlan(floorplan);
+        setError(null);
+      })
+      .catch((err) => setError(String(err)));
   }, [floor]);
 
   function refresh() {
-    if (floor) api.floorplan.get(floor).then(setPlan);
-    api.circuits.list().then(setCircuits);
+    const floorplan = floor ? api.floorplan.get(floor) : Promise.resolve(plan);
+    Promise.all([floorplan, api.circuits.list()])
+      .then(([nextPlan, circuitList]) => {
+        setPlan(nextPlan);
+        setCircuits(circuitList);
+        setError(null);
+      })
+      .catch((err) => setError(String(err)));
   }
 
   const bounds = useMemo(() => {
@@ -113,10 +127,15 @@ export function FloorplanView() {
 
   async function deleteSelectedPoint() {
     if (selectedPointId == null) return;
-    await api.circuitPoints.remove(selectedPointId);
-    setSelectedPointId(null);
-    setSelectedCircuitId(null);
-    refresh();
+    try {
+      await api.circuitPoints.remove(selectedPointId);
+      setSelectedPointId(null);
+      setSelectedCircuitId(null);
+      setError(null);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   const selectedPoint = plan.circuit_points.find((p) => p.id === selectedPointId) ?? null;
@@ -125,6 +144,7 @@ export function FloorplanView() {
   return (
     <div className="floorplan-layout">
       <div className="floorplan-main">
+        {error && <p className="error">{error}</p>}
         <div className="floorplan-toolbar">
           <label>
             Floor:{' '}
@@ -280,24 +300,30 @@ function AddPointForm({
   const [kind, setKind] = useState('outlet');
   const [label, setLabel] = useState('');
   const [coords, setCoords] = useState({ x, y });
+  const [error, setError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (roomId === '' || circuitId === '') return;
-    await api.circuitPoints.create({
-      room_id: roomId,
-      circuit_id: circuitId,
-      kind,
-      x: coords.x,
-      y: coords.y,
-      label: label || null,
-    });
-    onCreated();
+    try {
+      await api.circuitPoints.create({
+        room_id: roomId,
+        circuit_id: circuitId,
+        kind,
+        x: coords.x,
+        y: coords.y,
+        label: label || null,
+      });
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
     <form className="info-card" onSubmit={submit}>
       <h3>Add point</h3>
+      {error && <p className="error">{error}</p>}
       <label>
         Room:{' '}
         <select value={roomId} onChange={(e) => setRoomId(Number(e.target.value))}>

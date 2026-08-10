@@ -6,22 +6,35 @@ import { RoomBuilder } from './RoomBuilder';
 export function RoomEditor() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   function refresh() {
-    api.rooms.list().then(setRooms);
+    api.rooms
+      .list()
+      .then((roomList) => {
+        setRooms(roomList);
+        setError(null);
+      })
+      .catch((err) => setError(String(err)));
   }
 
   useEffect(refresh, []);
 
   async function deleteRoom(id: number) {
-    await api.rooms.remove(id);
-    if (editingRoom?.id === id) setEditingRoom(null);
-    refresh();
+    try {
+      await api.rooms.remove(id);
+      if (editingRoom?.id === id) setEditingRoom(null);
+      setError(null);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
     <div>
       <h2>Rooms</h2>
+      {error && <p className="error">{error}</p>}
       <table>
         <thead>
           <tr>

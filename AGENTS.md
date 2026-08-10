@@ -14,9 +14,9 @@ Two things gate it, and both matter:
 
 - `release.yml` runs on `workflow_run` of `ci` with
   `conclusion == 'success'`, so a red or cancelled CI can't publish.
-- It builds, **scans with Trivy, and only then pushes**, so a vulnerable image
-  never reaches GHCR. The scan is the last thing standing between a merge and
-  the host.
+- It builds, **scans with Trivy, and only then pushes**. A fixable HIGH or
+  CRITICAL finding does not reach GHCR under the current gate. The scan is the
+  last thing standing between a merge and the host.
 - **Two scans, one blocking.** Per runbook `decisions/0011` everything the
   scanner finds is printed and only findings with a fix available block the
   release. The unfixable ones are recorded in `docs/known-findings.md`, not
@@ -43,19 +43,31 @@ can't move what ships without moving what's tested, and nothing catches you if
 you undo it: the tests stay green either way, which is exactly the failure the
 job exists to prevent.
 
-**pip is uninstalled from the runtime image on purpose.** Nothing at runtime
-invokes it, and pip ships a CycloneDX SBOM describing its own vendored bundle
-that Trivy reads as installed inventory. Leaving pip in means the release gate
-reports vulnerabilities in packages the image doesn't expose. If you reinstate
-it, the gate will fail and it will look like an unrelated dependency problem.
+**The distroless runtime has no pip or shell on purpose.** Python dependencies
+are installed from `uv.lock` in the builder and only site-packages are copied to
+the runtime. Do not copy the builder's package manager or shell into the final
+stage; doing so expands the attack surface and changes Trivy's inventory.
+
+**`uv.lock` is part of the release input.** CI uses `uv sync --frozen`, and the
+Docker builder does the same. A dependency change is incomplete until the lock
+is refreshed. `backend/requirements-uv.txt` separately pins the build tool that
+reads it.
 
 **The base images are pinned by digest, not just tag.** Dependabot bumps the
 digest and the comment together. Keep both in sync when editing by hand.
 
 **`/data` is the only writable path.** The rootfs is read-only and the process
-runs as uid 10001. Anything that needs to write goes in the volume.
+runs as the distroless `nonroot` uid 65532. Anything that needs to write goes in
+the volume.
 
 ## Working here
+
+Review before starting a development slice, then review again as the seams move.
+At minimum, compare the application behavior, migrations, tests, dependency
+inputs, image, deploy controls, and docs. A green check proves its assertions
+passed; it does not prove those pieces still agree. Record decisions where the
+next change will find them, and keep the security posture and known findings
+current. Review is recurring maintenance, not a one-time certification.
 
 One issue, one branch, one worktree under `.claude/worktrees/<slug>` (already
 gitignored), one PR. `main` is protected with `enforce_admins`, so the PR path

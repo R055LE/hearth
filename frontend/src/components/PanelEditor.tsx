@@ -11,10 +11,16 @@ export function PanelEditor() {
   const [roomId, setRoomId] = useState<number | ''>('');
   const [amperage, setAmperage] = useState('');
   const [fedFrom, setFedFrom] = useState<number | ''>('');
+  const [error, setError] = useState<string | null>(null);
 
   function refresh() {
-    api.panels.list().then(setPanels);
-    api.circuits.list().then(setCircuits);
+    Promise.all([api.panels.list(), api.circuits.list()])
+      .then(([panelList, circuitList]) => {
+        setPanels(panelList);
+        setCircuits(circuitList);
+        setError(null);
+      })
+      .catch((err) => setError(String(err)));
   }
 
   useEffect(() => {
@@ -24,25 +30,36 @@ export function PanelEditor() {
 
   async function createPanel(e: React.FormEvent) {
     e.preventDefault();
-    await api.panels.create({
-      name,
-      room_id: roomId === '' ? null : roomId,
-      amperage: amperage === '' ? null : Number(amperage),
-      fed_from_panel_id: fedFrom === '' ? null : fedFrom,
-    });
-    setName('');
-    setAmperage('');
-    refresh();
+    try {
+      await api.panels.create({
+        name,
+        room_id: roomId === '' ? null : roomId,
+        amperage: amperage === '' ? null : Number(amperage),
+        fed_from_panel_id: fedFrom === '' ? null : fedFrom,
+      });
+      setName('');
+      setAmperage('');
+      setError(null);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function deletePanel(id: number) {
-    await api.panels.remove(id);
-    refresh();
+    try {
+      await api.panels.remove(id);
+      setError(null);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
     <div>
       <h2>Panels &amp; circuits</h2>
+      {error && <p className="error">{error}</p>}
       {panels.map((panel) => (
         <PanelCard
           key={panel.id}
@@ -52,6 +69,7 @@ export function PanelEditor() {
           circuits={circuits.filter((c) => c.panel_id === panel.id)}
           onDeletePanel={() => deletePanel(panel.id)}
           onChange={refresh}
+          onError={setError}
         />
       ))}
 
@@ -98,6 +116,7 @@ function PanelCard({
   circuits,
   onDeletePanel,
   onChange,
+  onError,
 }: {
   panel: Panel;
   room?: Room;
@@ -105,6 +124,7 @@ function PanelCard({
   circuits: Circuit[];
   onDeletePanel: () => void;
   onChange: () => void;
+  onError: (message: string | null) => void;
 }) {
   const [breakerLabel, setBreakerLabel] = useState('');
   const [circuitAmperage, setCircuitAmperage] = useState('');
@@ -114,24 +134,34 @@ function PanelCard({
 
   async function createCircuit(e: React.FormEvent) {
     e.preventDefault();
-    await api.circuits.create({
-      panel_id: panel.id,
-      breaker_label: breakerLabel,
-      amperage: circuitAmperage === '' ? null : Number(circuitAmperage),
-      poles: Number(poles),
-      panel_sticker_text: stickerText || null,
-      verified_description: verifiedDescription || null,
-    });
-    setBreakerLabel('');
-    setCircuitAmperage('');
-    setStickerText('');
-    setVerifiedDescription('');
-    onChange();
+    try {
+      await api.circuits.create({
+        panel_id: panel.id,
+        breaker_label: breakerLabel,
+        amperage: circuitAmperage === '' ? null : Number(circuitAmperage),
+        poles: Number(poles),
+        panel_sticker_text: stickerText || null,
+        verified_description: verifiedDescription || null,
+      });
+      setBreakerLabel('');
+      setCircuitAmperage('');
+      setStickerText('');
+      setVerifiedDescription('');
+      onError(null);
+      onChange();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function deleteCircuit(id: number) {
-    await api.circuits.remove(id);
-    onChange();
+    try {
+      await api.circuits.remove(id);
+      onError(null);
+      onChange();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
