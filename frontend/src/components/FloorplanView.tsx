@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { roomContainingPoint } from '../floorplanGeometry';
 import type { Circuit, CircuitPoint, Floorplan, Panel, Room } from '../types';
+
+type InteractionMode = 'idle' | 'add' | 'walk' | 'edit' | 'move';
+type PointDraft = Omit<CircuitPoint, 'id'>;
 
 function getSvgPoint(svg: SVGSVGElement, evt: React.MouseEvent): { x: number; y: number } {
   const pt = svg.createSVGPoint();
@@ -42,8 +46,12 @@ export function FloorplanView() {
   const [plan, setPlan] = useState<Floorplan>({ rooms: [], circuit_points: [] });
   const [selectedPointId, setSelectedPointId] = useState<number | null>(null);
   const [selectedCircuitId, setSelectedCircuitId] = useState<number | null>(null);
-  const [addMode, setAddMode] = useState(false);
-  const [draftPoint, setDraftPoint] = useState<{ x: number; y: number } | null>(null);
+  const [mode, setMode] = useState<InteractionMode>('idle');
+  const [draftPoint, setDraftPoint] = useState<PointDraft | null>(null);
+  const [walkCircuitId, setWalkCircuitId] = useState<number | ''>('');
+  const [walkKind, setWalkKind] = useState('outlet');
+  const [walkCreatedIds, setWalkCreatedIds] = useState<number[]>([]);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -76,17 +84,6 @@ export function FloorplanView() {
       .catch((err) => setError(String(err)));
   }, [floor]);
 
-  function refresh() {
-    const floorplan = floor ? api.floorplan.get(floor) : Promise.resolve(plan);
-    Promise.all([floorplan, api.circuits.list()])
-      .then(([nextPlan, circuitList]) => {
-        setPlan(nextPlan);
-        setCircuits(circuitList);
-        setError(null);
-      })
-      .catch((err) => setError(String(err)));
-  }
-
   const bounds = useMemo(() => {
     const xs: number[] = [];
     const ys: number[] = [];
@@ -116,17 +113,154 @@ export function FloorplanView() {
     return `${panel?.name ?? 'unknown panel'} — breaker ${circuit.breaker_label}`;
   }
 
-  function selectPoint(point: CircuitPoint) {
-    setSelectedPointId(point.id);
-    setSelectedCircuitId(point.circuit_id);
-    setAddMode(false);
+  function finishInteraction() {
+    setMode('idle');
     setDraftPoint(null);
   }
 
+  function finishWalk() {
+    if (walkCircuitId !== '') setSelectedCircuitId(walkCircuitId);
+    setWalkCreatedIds([]);
+    finishInteraction();
+  }
+
+  function startAdd() {
+    if (mode === 'add') {
+      finishInteraction();
+      return;
+    }
+    setSelectedPointId(null);
+    setDraftPoint(null);
+    setMode('add');
+  }
+
+  function startWalk() {
+    if (mode === 'walk') {
+      finishWalk();
+      return;
+    }
+    const circuitId = selectedCircuitId ?? circuits[0]?.id;
+    if (circuitId == null) return;
+    setSelectedPointId(null);
+    setSelectedCircuitId(circuitId);
+    setWalkCircuitId(circuitId);
+    setWalkCreatedIds([]);
+    setDraftPoint(null);
+    setMode('walk');
+  }
+
+  function selectPoint(point: CircuitPoint) {
+    if (mode !== 'idle') return;
+    setSelectedPointId(point.id);
+    setSelectedCircuitId(point.circuit_id);
+    setDraftPoint(null);
+  }
+
+  function beginEdit(move: boolean) {
+    const point = plan.circuit_points.find((candidate) => candidate.id === selectedPointId);
+    if (!point) return;
+    const { id: _id, ...draft } = point;
+    setDraftPoint(draft);
+    setMode(move ? 'move' : 'edit');
+  }
+
+  function handleFloorChange(nextFloor: string) {
+    if (mode === 'walk') setWalkCreatedIds([]);
+    finishInteraction();
+    setSelectedPointId(null);
+    setSelectedCircuitId(null);
+    setFloor(nextFloor);
+  }
+
   function handleSvgClick(evt: React.MouseEvent<SVGSVGElement>) {
-    if (!addMode || !svgRef.current) return;
+    if (!svgRef.current || !['add', 'walk', 'move'].includes(mode)) return;
     if ((evt.target as SVGElement).tagName === 'circle') return;
-    setDraftPoint(getSvgPoint(svgRef.current, evt));
+
+    const point = getSvgPoint(svgRef.current, evt);
+    const inferredRoom = roomContainingPoint(plan.rooms, [point.x, point.y]);
+    if (mode === 'move') {
+      setDraftPoint((current) =>
+        current
+          ? { ...current, ...point, room_id: inferredRoom?.id ?? current.room_id }
+          : current,
+      );
+      return;
+    }
+
+    setDraftPoint((current) => {
+      const roomId = inferredRoom?.id ?? current?.room_id ?? plan.rooms[0]?.id;
+      const circuitId =
+        mode === 'walk'
+          ? walkCircuitId
+          : current?.circuit_id ?? selectedCircuitId ?? circuits[0]?.id;
+      if (roomId == null || circuitId === '' || circuitId == null) return current;
+      return {
+        room_id: roomId,
+        circuit_id: circuitId,
+        kind: mode === 'walk' ? walkKind : current?.kind ?? 'outlet',
+        x: point.x,
+        y: point.y,
+        label: current?.label ?? null,
+      };
+    });
+  }
+
+  function changeDraft(change: Partial<PointDraft>) {
+    setDraftPoint((current) => (current ? { ...current, ...change } : current));
+  }
+
+  async function saveDraft() {
+    if (!draftPoint) return;
+    setSaving(true);
+    try {
+      if (mode === 'edit' || mode === 'move') {
+        if (selectedPointId == null) return;
+        const saved = await api.circuitPoints.update(selectedPointId, draftPoint);
+        setPlan((current) => ({
+          ...current,
+          circuit_points: current.circuit_points.map((point) =>
+            point.id === saved.id ? saved : point,
+          ),
+        }));
+        setSelectedCircuitId(saved.circuit_id);
+        finishInteraction();
+      } else {
+        const saved = await api.circuitPoints.create(draftPoint);
+        setPlan((current) => ({
+          ...current,
+          circuit_points: [...current.circuit_points, saved],
+        }));
+        if (mode === 'walk') {
+          setWalkCreatedIds((ids) => [...ids, saved.id]);
+          setDraftPoint(null);
+        } else {
+          setSelectedPointId(saved.id);
+          setSelectedCircuitId(saved.circuit_id);
+          finishInteraction();
+        }
+      }
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function undoLastWalkPoint() {
+    const pointId = walkCreatedIds.at(-1);
+    if (pointId == null) return;
+    try {
+      await api.circuitPoints.remove(pointId);
+      setPlan((current) => ({
+        ...current,
+        circuit_points: current.circuit_points.filter((point) => point.id !== pointId),
+      }));
+      setWalkCreatedIds((ids) => ids.slice(0, -1));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function deleteSelectedPoint() {
@@ -134,10 +268,13 @@ export function FloorplanView() {
     if (!window.confirm('Delete this point? This cannot be undone.')) return;
     try {
       await api.circuitPoints.remove(selectedPointId);
+      setPlan((current) => ({
+        ...current,
+        circuit_points: current.circuit_points.filter((point) => point.id !== selectedPointId),
+      }));
       setSelectedPointId(null);
       setSelectedCircuitId(null);
       setError(null);
-      refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -145,239 +282,323 @@ export function FloorplanView() {
 
   const selectedPoint = plan.circuit_points.find((p) => p.id === selectedPointId) ?? null;
   const selectedCircuit = circuits.find((c) => c.id === selectedCircuitId) ?? null;
+  const activeEdit = mode === 'edit' || mode === 'move';
 
   return (
     <section aria-labelledby="floorplan-heading">
       <h2 id="floorplan-heading">Floorplan</h2>
-      <div className="floorplan-layout">
+      <div className={`floorplan-layout${mode === 'walk' ? ' walking' : ''}`}>
         <div className="floorplan-main">
-        {error && <p className="error">{error}</p>}
-        <div className="floorplan-toolbar">
-          <label>
-            Floor:{' '}
-            <select value={floor} onChange={(e) => setFloor(e.target.value)}>
-              {floors.map((f) => (
-                <option key={f} value={f}>
-                  {f}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            onClick={() => {
-              setAddMode((v) => !v);
-              setDraftPoint(null);
-            }}
-          >
-            {addMode ? 'Cancel add point' : 'Add point'}
-          </button>
+          {error && <p className="error">{error}</p>}
+          <div className="floorplan-toolbar">
+            <label>
+              Floor:{' '}
+              <select value={floor} onChange={(e) => handleFloorChange(e.target.value)}>
+                {floors.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button onClick={startAdd} disabled={activeEdit || mode === 'walk'}>
+              {mode === 'add' ? 'Cancel add point' : 'Add point'}
+            </button>
+            <button
+              onClick={startWalk}
+              disabled={activeEdit || mode === 'add' || circuits.length === 0 || plan.rooms.length === 0}
+            >
+              {mode === 'walk' ? 'Finish circuit walk' : 'Walk circuit'}
+            </button>
+          </div>
+
+          {plan.rooms.length === 0 ? (
+            <p>No rooms on this floor yet — add some in the Rooms tab.</p>
+          ) : (
+            <svg
+              ref={svgRef}
+              viewBox={`${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`}
+              className="floorplan-svg"
+              onClick={handleSvgClick}
+            >
+              <title>{`Floorplan for ${floor}`}</title>
+              {plan.rooms.map((room) => {
+                const [cx, cy] = centroid(room.polygon);
+                return (
+                  <g key={room.id}>
+                    <polygon
+                      points={room.polygon.map(([x, y]) => `${x},${y}`).join(' ')}
+                      className="room-polygon"
+                    />
+                    <text x={cx} y={cy} className="room-label" textAnchor="middle">
+                      {room.name}
+                    </text>
+                  </g>
+                );
+              })}
+              {plan.circuit_points.map((storedPoint) => {
+                const point =
+                  activeEdit && storedPoint.id === selectedPointId && draftPoint
+                    ? { ...storedPoint, ...draftPoint }
+                    : storedPoint;
+                const isSelectedPoint = point.id === selectedPointId;
+                const isSelectedCircuit = point.circuit_id === selectedCircuitId;
+                return (
+                  <circle
+                    key={point.id}
+                    cx={point.x}
+                    cy={point.y}
+                    r={isSelectedPoint ? 2.2 : 1.5}
+                    fill={colorForKind(point.kind)}
+                    stroke={isSelectedCircuit ? '#f97316' : 'none'}
+                    strokeWidth={0.6}
+                    className="point-marker"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={pointAccessibleLabel(point)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      selectPoint(point);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter' && e.key !== ' ') return;
+                      e.preventDefault();
+                      selectPoint(point);
+                    }}
+                  >
+                    <title>{pointAccessibleLabel(point)}</title>
+                  </circle>
+                );
+              })}
+              {draftPoint && !activeEdit && (
+                <circle
+                  cx={draftPoint.x}
+                  cy={draftPoint.y}
+                  r={2}
+                  fill="none"
+                  stroke="#f97316"
+                  strokeWidth={0.5}
+                  pointerEvents="none"
+                />
+              )}
+            </svg>
+          )}
         </div>
 
-        {plan.rooms.length === 0 ? (
-          <p>No rooms on this floor yet — add some in the Rooms tab.</p>
-        ) : (
-          <svg
-            ref={svgRef}
-            viewBox={`${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`}
-            className="floorplan-svg"
-            onClick={handleSvgClick}
-          >
-            <title>{`Floorplan for ${floor}`}</title>
-            {plan.rooms.map((room) => {
-              const [cx, cy] = centroid(room.polygon);
-              return (
-                <g key={room.id}>
-                  <polygon
-                    points={room.polygon.map(([x, y]) => `${x},${y}`).join(' ')}
-                    className="room-polygon"
-                  />
-                  <text x={cx} y={cy} className="room-label" textAnchor="middle">
-                    {room.name}
-                  </text>
-                </g>
-              );
-            })}
-            {plan.circuit_points.map((point) => {
-              const isSelectedPoint = point.id === selectedPointId;
-              const isSelectedCircuit = point.circuit_id === selectedCircuitId;
-              return (
-                <circle
-                  key={point.id}
-                  cx={point.x}
-                  cy={point.y}
-                  r={isSelectedPoint ? 2.2 : 1.5}
-                  fill={colorForKind(point.kind)}
-                  stroke={isSelectedCircuit ? '#f97316' : 'none'}
-                  strokeWidth={0.6}
-                  className="point-marker"
-                  role="button"
-                  tabIndex={0}
-                  aria-label={pointAccessibleLabel(point)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    selectPoint(point);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' && e.key !== ' ') return;
-                    e.preventDefault();
-                    selectPoint(point);
+        <div className={`floorplan-sidebar${mode === 'walk' ? ' walk-sidebar' : ''}`}>
+          {mode === 'walk' && (
+            <div className="info-card walk-controls">
+              <h3>Circuit walk</h3>
+              <label>
+                Circuit:{' '}
+                <select
+                  value={walkCircuitId}
+                  onChange={(e) => {
+                    const circuitId = Number(e.target.value);
+                    setWalkCircuitId(circuitId);
+                    setSelectedCircuitId(circuitId);
+                    changeDraft({ circuit_id: circuitId });
                   }}
                 >
-                  <title>{pointAccessibleLabel(point)}</title>
-                </circle>
-              );
-            })}
-            {draftPoint && (
-              <circle cx={draftPoint.x} cy={draftPoint.y} r={2} fill="none" stroke="#f97316" strokeWidth={0.5} />
-            )}
-          </svg>
-        )}
-        </div>
-
-        <div className="floorplan-sidebar">
-        {draftPoint ? (
-          <AddPointForm
-            point={draftPoint}
-            rooms={plan.rooms}
-            circuits={circuits}
-            panels={panels}
-            onPointChange={setDraftPoint}
-            onCancel={() => setDraftPoint(null)}
-            onCreated={() => {
-              setDraftPoint(null);
-              setAddMode(false);
-              refresh();
-            }}
-          />
-        ) : selectedPoint ? (
-          <div className="info-card">
-            <h3>{selectedPoint.kind}</h3>
-            {selectedPoint.label && <p>{selectedPoint.label}</p>}
-            <p>Room: {allRooms.find((r) => r.id === selectedPoint.room_id)?.name}</p>
-            <p>Circuit: {circuitLabel(selectedPoint.circuit_id)}</p>
-            {selectedCircuit?.verified_description && (
-              <p>Confirmed: {selectedCircuit.verified_description}</p>
-            )}
-            {selectedCircuit?.panel_sticker_text && (
-              <p>Panel says: {selectedCircuit.panel_sticker_text}</p>
-            )}
-            <button onClick={deleteSelectedPoint}>Delete point</button>
-          </div>
-        ) : (
-          <p>Click a point on the floorplan, or a circuit below, to see details.</p>
-        )}
-
-        <h3>Circuits</h3>
-        <ul className="circuit-list">
-          {panels.map((panel) => (
-            <li key={panel.id}>
-              <strong>{panel.name}</strong>
-              <ul>
-                {circuits
-                  .filter((c) => c.panel_id === panel.id)
-                  .map((circuit) => (
-                    <li key={circuit.id}>
-                      <button
-                        type="button"
-                        className={circuit.id === selectedCircuitId ? 'selected' : ''}
-                        onClick={() => {
-                          setSelectedCircuitId(circuit.id);
-                          setSelectedPointId(null);
-                        }}
-                      >
-                        Breaker {circuit.breaker_label}
-                        {circuit.verified_description ? ` — ${circuit.verified_description}` : ''}
-                      </button>
-                    </li>
+                  {circuits.map((circuit) => (
+                    <option key={circuit.id} value={circuit.id}>
+                      {circuitLabel(circuit.id)}
+                    </option>
                   ))}
+                </select>
+              </label>
+              <label>
+                Kind:{' '}
+                <input
+                  value={walkKind}
+                  onChange={(e) => {
+                    setWalkKind(e.target.value);
+                    changeDraft({ kind: e.target.value });
+                  }}
+                  list="circuit-walk-kind-options"
+                />
+                <KindOptions id="circuit-walk-kind-options" />
+              </label>
+              <p aria-live="polite">
+                {walkCreatedIds.length} {walkCreatedIds.length === 1 ? 'point' : 'points'} added this walk.
+              </p>
+              {!draftPoint && <p>Tap the floorplan to place the next point.</p>}
+              <div className="form-actions">
+                <button type="button" onClick={undoLastWalkPoint} disabled={walkCreatedIds.length === 0}>
+                  Undo last point
+                </button>
+                <button type="button" onClick={finishWalk}>Finish walk</button>
+              </div>
+            </div>
+          )}
+
+          {draftPoint ? (
+            <PointForm
+              point={draftPoint}
+              rooms={plan.rooms}
+              circuits={circuits}
+              panels={panels}
+              title={activeEdit ? 'Edit point' : mode === 'walk' ? 'Next point' : 'Add point'}
+              submitLabel={activeEdit ? 'Save point' : mode === 'walk' ? 'Add point' : 'Create'}
+              showCircuitAndKind={mode !== 'walk'}
+              moveMode={mode === 'move'}
+              saving={saving}
+              onPointChange={changeDraft}
+              onMove={() => setMode('move')}
+              onCancel={() => {
+                if (mode === 'walk') setDraftPoint(null);
+                else finishInteraction();
+              }}
+              onSubmit={saveDraft}
+            />
+          ) : selectedPoint && mode === 'idle' ? (
+            <div className="info-card">
+              <h3>{selectedPoint.kind}</h3>
+              {selectedPoint.label && <p>{selectedPoint.label}</p>}
+              <p>Room: {allRooms.find((r) => r.id === selectedPoint.room_id)?.name}</p>
+              <p>Circuit: {circuitLabel(selectedPoint.circuit_id)}</p>
+              {selectedCircuit?.verified_description && (
+                <p>Confirmed: {selectedCircuit.verified_description}</p>
+              )}
+              {selectedCircuit?.panel_sticker_text && (
+                <p>Panel says: {selectedCircuit.panel_sticker_text}</p>
+              )}
+              <div className="form-actions">
+                <button type="button" onClick={() => beginEdit(false)}>Edit point</button>
+                <button type="button" onClick={() => beginEdit(true)}>Move point</button>
+                <button type="button" onClick={deleteSelectedPoint}>Delete point</button>
+              </div>
+            </div>
+          ) : mode !== 'walk' ? (
+            <p>Click a point on the floorplan, or a circuit below, to see details.</p>
+          ) : null}
+
+          {mode !== 'walk' && (
+            <>
+              <h3>Circuits</h3>
+              <ul className="circuit-list">
+                {panels.map((panel) => (
+                  <li key={panel.id}>
+                    <strong>{panel.name}</strong>
+                    <ul>
+                      {circuits
+                        .filter((c) => c.panel_id === panel.id)
+                        .map((circuit) => (
+                          <li key={circuit.id}>
+                            <button
+                              type="button"
+                              className={circuit.id === selectedCircuitId ? 'selected' : ''}
+                              onClick={() => {
+                                setSelectedCircuitId(circuit.id);
+                                setSelectedPointId(null);
+                              }}
+                            >
+                              Breaker {circuit.breaker_label}
+                              {circuit.verified_description ? ` — ${circuit.verified_description}` : ''}
+                            </button>
+                          </li>
+                        ))}
+                    </ul>
+                  </li>
+                ))}
               </ul>
-            </li>
-          ))}
-        </ul>
+            </>
+          )}
         </div>
       </div>
     </section>
   );
 }
 
-function AddPointForm({
+function KindOptions({ id }: { id: string }) {
+  return (
+    <datalist id={id}>
+      <option value="outlet" />
+      <option value="switch" />
+      <option value="light" />
+      <option value="appliance" />
+      <option value="smoke_detector" />
+    </datalist>
+  );
+}
+
+function PointForm({
   point,
   rooms,
   circuits,
   panels,
+  title,
+  submitLabel,
+  showCircuitAndKind,
+  moveMode,
+  saving,
   onPointChange,
+  onMove,
   onCancel,
-  onCreated,
+  onSubmit,
 }: {
-  point: { x: number; y: number };
+  point: PointDraft;
   rooms: Room[];
   circuits: Circuit[];
   panels: Panel[];
-  onPointChange: (point: { x: number; y: number }) => void;
+  title: string;
+  submitLabel: string;
+  showCircuitAndKind: boolean;
+  moveMode: boolean;
+  saving: boolean;
+  onPointChange: (change: Partial<PointDraft>) => void;
+  onMove: () => void;
   onCancel: () => void;
-  onCreated: () => void;
+  onSubmit: () => void;
 }) {
-  const [roomId, setRoomId] = useState<number | ''>(rooms[0]?.id ?? '');
-  const [circuitId, setCircuitId] = useState<number | ''>(circuits[0]?.id ?? '');
-  const [kind, setKind] = useState('outlet');
-  const [label, setLabel] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(e: React.FormEvent) {
+  function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (roomId === '' || circuitId === '') return;
-    try {
-      await api.circuitPoints.create({
-        room_id: roomId,
-        circuit_id: circuitId,
-        kind,
-        x: point.x,
-        y: point.y,
-        label: label || null,
-      });
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    onSubmit();
   }
 
   return (
-    <form className="info-card" onSubmit={submit}>
-      <h3>Add point</h3>
-      {error && <p className="error">{error}</p>}
+    <form className="info-card point-form" onSubmit={submit}>
+      <h3>{title}</h3>
+      {moveMode && <p>Tap the floorplan to choose the new location.</p>}
       <label>
         Room:{' '}
-        <select value={roomId} onChange={(e) => setRoomId(Number(e.target.value))}>
-          {rooms.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
+        <select value={point.room_id} onChange={(e) => onPointChange({ room_id: Number(e.target.value) })}>
+          {rooms.map((room) => (
+            <option key={room.id} value={room.id}>
+              {room.name}
             </option>
           ))}
         </select>
       </label>
+      {showCircuitAndKind && (
+        <>
+          <label>
+            Circuit:{' '}
+            <select
+              value={point.circuit_id}
+              onChange={(e) => onPointChange({ circuit_id: Number(e.target.value) })}
+            >
+              {circuits.map((circuit) => (
+                <option key={circuit.id} value={circuit.id}>
+                  {panels.find((panel) => panel.id === circuit.panel_id)?.name} — breaker {circuit.breaker_label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Kind:{' '}
+            <input
+              value={point.kind}
+              onChange={(e) => onPointChange({ kind: e.target.value })}
+              list="point-kind-options"
+            />
+            <KindOptions id="point-kind-options" />
+          </label>
+        </>
+      )}
       <label>
-        Circuit:{' '}
-        <select value={circuitId} onChange={(e) => setCircuitId(Number(e.target.value))}>
-          {circuits.map((c) => (
-            <option key={c.id} value={c.id}>
-              {panels.find((p) => p.id === c.panel_id)?.name} — breaker {c.breaker_label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Kind:{' '}
-        <input value={kind} onChange={(e) => setKind(e.target.value)} list="kind-options" />
-        <datalist id="kind-options">
-          <option value="outlet" />
-          <option value="switch" />
-          <option value="light" />
-          <option value="appliance" />
-          <option value="smoke_detector" />
-        </datalist>
-      </label>
-      <label>
-        Label: <input value={label} onChange={(e) => setLabel(e.target.value)} />
+        Label:{' '}
+        <input value={point.label ?? ''} onChange={(e) => onPointChange({ label: e.target.value || null })} />
       </label>
       <label>
         X:{' '}
@@ -385,7 +606,7 @@ function AddPointForm({
           type="number"
           step="0.1"
           value={point.x}
-          onChange={(e) => onPointChange({ ...point, x: Number(e.target.value) })}
+          onChange={(e) => onPointChange({ x: Number(e.target.value) })}
         />
       </label>
       <label>
@@ -394,20 +615,18 @@ function AddPointForm({
           type="number"
           step="0.1"
           value={point.y}
-          onChange={(e) => onPointChange({ ...point, y: Number(e.target.value) })}
+          onChange={(e) => onPointChange({ y: Number(e.target.value) })}
         />
       </label>
       <div className="form-actions">
-        <button type="submit" disabled={rooms.length === 0 || circuits.length === 0}>
-          Create
+        <button type="submit" disabled={saving || rooms.length === 0 || circuits.length === 0}>
+          {saving ? 'Saving…' : submitLabel}
         </button>
-        <button type="button" onClick={onCancel}>
-          Cancel
-        </button>
+        {showCircuitAndKind && !moveMode && submitLabel === 'Save point' && (
+          <button type="button" onClick={onMove}>Move on floorplan</button>
+        )}
+        <button type="button" onClick={onCancel}>Cancel</button>
       </div>
-      {(rooms.length === 0 || circuits.length === 0) && (
-        <p>Need at least one room and one circuit before adding a point.</p>
-      )}
     </form>
   );
 }

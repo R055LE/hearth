@@ -84,6 +84,19 @@
   margin-bottom: 0.4rem;
 }
 
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.walk-controls select,
+.point-form select,
+.walk-controls input,
+.point-form input {
+  max-width: 100%;
+}
+
 .circuit-list {
   list-style: none;
   padding-left: 0;
@@ -198,5 +211,33 @@
   .floorplan-svg {
     min-height: 360px;
     height: 55vh;
+  }
+
+  .floorplan-layout.walking {
+    padding-bottom: 12rem;
+  }
+
+  .walk-sidebar {
+    position: fixed;
+    z-index: 10;
+    right: 1rem;
+    bottom: 1rem;
+    left: 1rem;
+    width: auto;
+    max-height: 45vh;
+    overflow-y: auto;
+    padding: 0.75rem;
+    border: 1px solid #999;
+    border-radius: 8px;
+    background: Canvas;
+    box-shadow: 0 4px 18px rgb(0 0 0 / 25%);
+  }
+
+  .walk-sidebar .info-card {
+    margin-bottom: 0.75rem;
+  }
+
+  .walk-sidebar .info-card:last-child {
+    margin-bottom: 0;
   }
 }
