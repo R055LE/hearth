@@ -6,6 +6,16 @@ and an interactive floorplan where clicking an outlet/fixture shows its breaker
 scheduling and vendor/quote tracking are planned for later phases — the schema
 is shaped to add them without a rework.
 
+## Screenshots
+
+Desktop floorplan with a selected point and its circuit details:
+
+![Hearth desktop floorplan](docs/screenshots/floorplan-desktop.png)
+
+Circuit-walk capture at phone width:
+
+<img src="docs/screenshots/circuit-walk-mobile.png" alt="Hearth circuit-walk capture on a phone" width="390">
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's put together and why.
 
 ## Layout
