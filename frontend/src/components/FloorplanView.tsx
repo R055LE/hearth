@@ -38,14 +38,20 @@ function pointAccessibleLabel(point: CircuitPoint): string {
   return `${point.kind}: ${point.label ?? `point ${point.id}`}`;
 }
 
-export function FloorplanView() {
+export function FloorplanView({
+  initialCircuitId,
+  initialFloor,
+}: {
+  initialCircuitId?: number;
+  initialFloor?: string;
+}) {
   const [allRooms, setAllRooms] = useState<Room[]>([]);
   const [panels, setPanels] = useState<Panel[]>([]);
   const [circuits, setCircuits] = useState<Circuit[]>([]);
-  const [floor, setFloor] = useState<string>('');
+  const [floor, setFloor] = useState<string>(initialFloor ?? '');
   const [plan, setPlan] = useState<Floorplan>({ rooms: [], circuit_points: [] });
   const [selectedPointId, setSelectedPointId] = useState<number | null>(null);
-  const [selectedCircuitId, setSelectedCircuitId] = useState<number | null>(null);
+  const [selectedCircuitId, setSelectedCircuitId] = useState<number | null>(initialCircuitId ?? null);
   const [mode, setMode] = useState<InteractionMode>('idle');
   const [draftPoint, setDraftPoint] = useState<PointDraft | null>(null);
   const [walkCircuitId, setWalkCircuitId] = useState<number | ''>('');

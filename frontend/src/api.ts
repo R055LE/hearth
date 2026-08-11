@@ -47,6 +47,7 @@ export const api = {
     remove: (id: number) => del(`/circuits/${id}`),
   },
   circuitPoints: {
+    list: () => request<CircuitPoint[]>('/circuit-points'),
     create: (point: Omit<CircuitPoint, 'id'>) => post<CircuitPoint>('/circuit-points', point),
     update: (id: number, point: Partial<Omit<CircuitPoint, 'id'>>) =>
       patch<CircuitPoint>(`/circuit-points/${id}`, point),
