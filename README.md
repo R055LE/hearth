@@ -40,8 +40,11 @@ npm run dev
 Open http://localhost:5173 — the Vite dev server proxies `/api` to the
 backend on :8000.
 
-Tests: `cd backend && uv run pytest`. Lint: `uv run ruff check .` (backend),
-`npm run lint` (frontend).
+Backend tests: `cd backend && uv run pytest`. Frontend tests: `cd frontend &&
+npm run test` for unit tests or `npm run test:e2e` for the Chromium browser
+regressions. Install the browser once with `npx playwright install chromium`.
+The browser suite uses synthetic API fixtures and does not need a Hearth
+database. Lint: `uv run ruff check .` (backend), `npm run lint` (frontend).
 
 ## Importing an existing drawio floorplan
 

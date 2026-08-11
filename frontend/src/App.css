@@ -4,6 +4,10 @@
   padding: 1rem;
 }
 
+.app h1 {
+  margin-top: 0;
+}
+
 .tabs {
   display: flex;
   gap: 0.5rem;
@@ -22,6 +26,7 @@
 
 .floorplan-main {
   flex: 1;
+  min-width: 0;
 }
 
 .floorplan-toolbar {
@@ -53,6 +58,15 @@
   fill: #333;
 }
 
+.point-marker:focus {
+  outline: none;
+}
+
+.point-marker:focus-visible {
+  stroke: #f97316;
+  stroke-width: 0.8;
+}
+
 .floorplan-sidebar {
   width: 320px;
   flex-shrink: 0;
@@ -80,12 +94,16 @@
   padding-left: 1rem;
 }
 
-.circuit-list li {
-  cursor: pointer;
+.circuit-list button {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: inherit;
   padding: 0.1rem 0;
+  text-align: left;
 }
 
-.circuit-list li.selected {
+.circuit-list button.selected {
   font-weight: bold;
   color: #f97316;
 }
@@ -142,8 +160,43 @@
   margin-bottom: 0.5rem;
 }
 
+.wall-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.wall-row label {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin: 0;
+}
+
+.wall-row input {
+  width: 5rem;
+}
+
 .draft-room-outline {
   fill: none;
   stroke: #f97316;
   stroke-width: 0.4;
+}
+
+@media (max-width: 700px) {
+  .floorplan-layout,
+  .room-builder {
+    flex-direction: column;
+  }
+
+  .floorplan-sidebar {
+    width: 100%;
+  }
+
+  .floorplan-svg {
+    min-height: 360px;
+    height: 55vh;
+  }
 }
