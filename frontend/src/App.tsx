@@ -11,17 +11,20 @@ function App() {
 
   return (
     <div className="app">
-      <nav className="tabs">
-        <button className={tab === 'floorplan' ? 'active' : ''} onClick={() => setTab('floorplan')}>
-          Floorplan
-        </button>
-        <button className={tab === 'rooms' ? 'active' : ''} onClick={() => setTab('rooms')}>
-          Rooms
-        </button>
-        <button className={tab === 'panels' ? 'active' : ''} onClick={() => setTab('panels')}>
-          Panels &amp; circuits
-        </button>
-      </nav>
+      <header>
+        <h1>Hearth</h1>
+        <nav className="tabs">
+          <button className={tab === 'floorplan' ? 'active' : ''} onClick={() => setTab('floorplan')}>
+            Floorplan
+          </button>
+          <button className={tab === 'rooms' ? 'active' : ''} onClick={() => setTab('rooms')}>
+            Rooms
+          </button>
+          <button className={tab === 'panels' ? 'active' : ''} onClick={() => setTab('panels')}>
+            Panels &amp; circuits
+          </button>
+        </nav>
+      </header>
       <main>
         {tab === 'floorplan' && <FloorplanView />}
         {tab === 'rooms' && <RoomEditor />}

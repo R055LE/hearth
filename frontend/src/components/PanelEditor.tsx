@@ -47,6 +47,7 @@ export function PanelEditor() {
   }
 
   async function deletePanel(id: number) {
+    if (!window.confirm('Delete this panel? This cannot be undone.')) return;
     try {
       await api.panels.remove(id);
       setError(null);
@@ -155,6 +156,7 @@ function PanelCard({
   }
 
   async function deleteCircuit(id: number) {
+    if (!window.confirm('Delete this circuit? This cannot be undone.')) return;
     try {
       await api.circuits.remove(id);
       onError(null);

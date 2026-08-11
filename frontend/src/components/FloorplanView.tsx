@@ -30,6 +30,10 @@ function colorForKind(kind: string): string {
   return KIND_COLORS[kind] ?? '#6b7280';
 }
 
+function pointAccessibleLabel(point: CircuitPoint): string {
+  return `${point.kind}: ${point.label ?? `point ${point.id}`}`;
+}
+
 export function FloorplanView() {
   const [allRooms, setAllRooms] = useState<Room[]>([]);
   const [panels, setPanels] = useState<Panel[]>([]);
@@ -127,6 +131,7 @@ export function FloorplanView() {
 
   async function deleteSelectedPoint() {
     if (selectedPointId == null) return;
+    if (!window.confirm('Delete this point? This cannot be undone.')) return;
     try {
       await api.circuitPoints.remove(selectedPointId);
       setSelectedPointId(null);
@@ -142,8 +147,10 @@ export function FloorplanView() {
   const selectedCircuit = circuits.find((c) => c.id === selectedCircuitId) ?? null;
 
   return (
-    <div className="floorplan-layout">
-      <div className="floorplan-main">
+    <section aria-labelledby="floorplan-heading">
+      <h2 id="floorplan-heading">Floorplan</h2>
+      <div className="floorplan-layout">
+        <div className="floorplan-main">
         {error && <p className="error">{error}</p>}
         <div className="floorplan-toolbar">
           <label>
@@ -175,6 +182,7 @@ export function FloorplanView() {
             className="floorplan-svg"
             onClick={handleSvgClick}
           >
+            <title>{`Floorplan for ${floor}`}</title>
             {plan.rooms.map((room) => {
               const [cx, cy] = centroid(room.polygon);
               return (
@@ -201,11 +209,22 @@ export function FloorplanView() {
                   fill={colorForKind(point.kind)}
                   stroke={isSelectedCircuit ? '#f97316' : 'none'}
                   strokeWidth={0.6}
+                  className="point-marker"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={pointAccessibleLabel(point)}
                   onClick={(e) => {
                     e.stopPropagation();
                     selectPoint(point);
                   }}
-                />
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    selectPoint(point);
+                  }}
+                >
+                  <title>{pointAccessibleLabel(point)}</title>
+                </circle>
               );
             })}
             {draftPoint && (
@@ -213,16 +232,16 @@ export function FloorplanView() {
             )}
           </svg>
         )}
-      </div>
+        </div>
 
-      <div className="floorplan-sidebar">
+        <div className="floorplan-sidebar">
         {draftPoint ? (
           <AddPointForm
-            x={draftPoint.x}
-            y={draftPoint.y}
+            point={draftPoint}
             rooms={plan.rooms}
             circuits={circuits}
             panels={panels}
+            onPointChange={setDraftPoint}
             onCancel={() => setDraftPoint(null)}
             onCreated={() => {
               setDraftPoint(null);
@@ -257,41 +276,44 @@ export function FloorplanView() {
                 {circuits
                   .filter((c) => c.panel_id === panel.id)
                   .map((circuit) => (
-                    <li
-                      key={circuit.id}
-                      className={circuit.id === selectedCircuitId ? 'selected' : ''}
-                      onClick={() => {
-                        setSelectedCircuitId(circuit.id);
-                        setSelectedPointId(null);
-                      }}
-                    >
-                      Breaker {circuit.breaker_label}
-                      {circuit.verified_description ? ` — ${circuit.verified_description}` : ''}
+                    <li key={circuit.id}>
+                      <button
+                        type="button"
+                        className={circuit.id === selectedCircuitId ? 'selected' : ''}
+                        onClick={() => {
+                          setSelectedCircuitId(circuit.id);
+                          setSelectedPointId(null);
+                        }}
+                      >
+                        Breaker {circuit.breaker_label}
+                        {circuit.verified_description ? ` — ${circuit.verified_description}` : ''}
+                      </button>
                     </li>
                   ))}
               </ul>
             </li>
           ))}
         </ul>
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
 function AddPointForm({
-  x,
-  y,
+  point,
   rooms,
   circuits,
   panels,
+  onPointChange,
   onCancel,
   onCreated,
 }: {
-  x: number;
-  y: number;
+  point: { x: number; y: number };
   rooms: Room[];
   circuits: Circuit[];
   panels: Panel[];
+  onPointChange: (point: { x: number; y: number }) => void;
   onCancel: () => void;
   onCreated: () => void;
 }) {
@@ -299,7 +321,6 @@ function AddPointForm({
   const [circuitId, setCircuitId] = useState<number | ''>(circuits[0]?.id ?? '');
   const [kind, setKind] = useState('outlet');
   const [label, setLabel] = useState('');
-  const [coords, setCoords] = useState({ x, y });
   const [error, setError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
@@ -310,8 +331,8 @@ function AddPointForm({
         room_id: roomId,
         circuit_id: circuitId,
         kind,
-        x: coords.x,
-        y: coords.y,
+        x: point.x,
+        y: point.y,
         label: label || null,
       });
       onCreated();
@@ -362,16 +383,18 @@ function AddPointForm({
         X:{' '}
         <input
           type="number"
-          value={coords.x}
-          onChange={(e) => setCoords((c) => ({ ...c, x: Number(e.target.value) }))}
+          step="0.1"
+          value={point.x}
+          onChange={(e) => onPointChange({ ...point, x: Number(e.target.value) })}
         />
       </label>
       <label>
         Y:{' '}
         <input
           type="number"
-          value={coords.y}
-          onChange={(e) => setCoords((c) => ({ ...c, y: Number(e.target.value) }))}
+          step="0.1"
+          value={point.y}
+          onChange={(e) => onPointChange({ ...point, y: Number(e.target.value) })}
         />
       </label>
       <div className="form-actions">
