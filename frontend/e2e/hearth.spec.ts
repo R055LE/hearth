@@ -30,6 +30,14 @@ const panel = {
   fed_from_panel_id: null,
 };
 
+const subpanel = {
+  id: 2,
+  name: 'Workshop subpanel',
+  room_id: 1,
+  amperage: 100,
+  fed_from_panel_id: 1,
+};
+
 const circuit = {
   id: 1,
   panel_id: 1,
@@ -44,8 +52,18 @@ const secondCircuit = {
   ...circuit,
   id: 2,
   breaker_label: '2',
+  poles: 2,
   panel_sticker_text: 'Garage lights',
-  verified_description: 'Garage lights and switches',
+  verified_description: null,
+};
+
+const subpanelCircuit = {
+  ...circuit,
+  id: 3,
+  panel_id: 2,
+  amperage: 15,
+  panel_sticker_text: 'Workshop bench',
+  verified_description: 'Workshop bench and task lights',
 };
 
 const point = {
@@ -85,15 +103,19 @@ async function mockApi(page: Page): Promise<ApiState> {
       return;
     }
     if (path === '/api/panels' && method === 'GET') {
-      await route.fulfill({ json: [panel] });
+      await route.fulfill({ json: [panel, subpanel] });
       return;
     }
     if (path === '/api/circuits' && method === 'GET') {
-      await route.fulfill({ json: [circuit, secondCircuit] });
+      await route.fulfill({ json: [circuit, secondCircuit, subpanelCircuit] });
       return;
     }
     if (path === '/api/floorplan/main' && method === 'GET') {
       await route.fulfill({ json: { rooms: [room], circuit_points: storedPoints } });
+      return;
+    }
+    if (path === '/api/circuit-points' && method === 'GET') {
+      await route.fulfill({ json: storedPoints });
       return;
     }
     if (path === '/api/circuit-points' && method === 'POST') {
@@ -264,10 +286,44 @@ test('makes the floorplan controls keyboard-operable and named', async ({ page }
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { level: 3, name: 'outlet' })).toBeVisible();
 
-  const circuitButton = page.getByRole('button', { name: /Breaker 1/ });
+  const circuitButton = page.getByRole('button', { name: /Breaker 1 — Garage/ });
   await circuitButton.focus();
   await page.keyboard.press('Enter');
   await expect(circuitButton).toHaveClass(/selected/);
+});
+
+test('shows panel status and opens mapped breakers on the floorplan', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Panels & circuits' }).click();
+
+  const mainPanel = page.getByRole('region', { name: 'Main panel breaker directory' });
+  const mappedBreaker = mainPanel.locator('.breaker-slot').filter({
+    hasText: 'Garage north and east walls',
+  });
+  const unmappedBreaker = mainPanel.locator('.breaker-slot').filter({ hasText: 'Garage lights' });
+
+  await expect(page.getByText('Feeds Workshop subpanel.')).toBeVisible();
+  await expect(page.getByText('Fed from Main panel.')).toBeVisible();
+  await expect(mappedBreaker.getByText('1 mapped point', { exact: true })).toBeVisible();
+  await expect(mappedBreaker.getByText('Verified', { exact: true })).toBeVisible();
+  await expect(unmappedBreaker.getByText('Unmapped', { exact: true })).toBeVisible();
+  await expect(unmappedBreaker.getByText('Needs verification', { exact: true })).toBeVisible();
+  await expect(
+    unmappedBreaker.getByRole('button', { name: 'View breaker 2 on floorplan' }),
+  ).toBeDisabled();
+
+  const mappedBox = await mappedBreaker.boundingBox();
+  const unmappedBox = await unmappedBreaker.boundingBox();
+  expect(unmappedBox?.height).toBeGreaterThan(mappedBox?.height ?? 0);
+
+  await mappedBreaker.getByRole('button', { name: 'View breaker 1 on floorplan' }).click();
+  await expect(page.getByRole('heading', { level: 2, name: 'Floorplan' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Breaker 1 — Garage/ })).toHaveClass(/selected/);
+  await expect(page.getByRole('button', { name: 'outlet: North wall outlet' })).toHaveAttribute(
+    'stroke',
+    '#f97316',
+  );
 });
 
 test('requires confirmation before deleting a point', async ({ page }) => {
@@ -303,4 +359,20 @@ test('keeps circuit-walk controls reachable over the phone floorplan', async ({ 
   expect(walkBox?.x).toBeGreaterThanOrEqual(0);
   expect((walkBox?.x ?? 0) + (walkBox?.width ?? 0)).toBeLessThanOrEqual(390);
   await expect(page.getByRole('button', { name: 'Finish walk' })).toBeVisible();
+});
+
+test('keeps panel controls contained at phone width', async ({ page }) => {
+  await mockApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Panels & circuits' }).click();
+
+  const mainPanel = page.locator('.panel-card').first();
+  const deletePanel = mainPanel.getByRole('button', { name: 'Delete panel' });
+  const deleteBox = await deletePanel.boundingBox();
+  expect(deleteBox?.height).toBeLessThan(50);
+  await expect(
+    page.getByLabel('Workshop subpanel mapping coverage').locator('span').first(),
+  ).toHaveText('1 circuit');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });

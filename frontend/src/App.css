@@ -135,16 +135,127 @@
 
 .panel-card {
   border: 1px solid #999;
-  border-radius: 4px;
-  padding: 0.75rem;
-  margin-bottom: 1rem;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
 }
 
 .panel-card-header {
   display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.panel-card-header > button {
+  flex-shrink: 0;
+}
+
+.panel-card-header h3,
+.panel-card-header p,
+.breaker-details h4,
+.breaker-details p {
+  margin-top: 0;
+}
+
+.panel-card-header h3,
+.panel-location,
+.panel-feed {
+  margin-bottom: 0.25rem;
+}
+
+.panel-amperage {
+  font-size: 0.85em;
+  font-weight: normal;
+}
+
+.panel-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0;
+  margin: 0.75rem 0;
+  border-top: 1px solid #999;
+  border-bottom: 1px solid #999;
+}
+
+.breaker-directory {
+  display: grid;
   gap: 0.5rem;
+}
+
+.breaker-slot {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 7rem) minmax(0, 1fr) minmax(10rem, auto);
+  border: 1px solid #777;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.breaker-slot.unmapped {
+  border-style: dashed;
+}
+
+.breaker-handle {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  margin-bottom: 0.5rem;
+  justify-content: center;
+  min-height: 5rem;
+  padding: 0.5rem;
+  border-right: 1px solid #777;
+  background: color-mix(in srgb, CanvasText 8%, Canvas);
+  text-align: center;
+}
+
+.breaker-handle strong {
+  font-size: 1.5rem;
+}
+
+.breaker-details {
+  align-self: center;
+  padding: 0.75rem;
+}
+
+.breaker-details h4,
+.breaker-details p {
+  margin-bottom: 0.25rem;
+}
+
+.status-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.status-badge {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
+.status-badge.mapped,
+.status-badge.verified {
+  color: #047857;
+}
+
+.status-badge.warning {
+  color: #b45309;
+}
+
+.breaker-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+
+.circuit-form {
+  padding-top: 0.75rem;
+  border-top: 1px solid #999;
 }
 
 .error {
@@ -239,5 +350,24 @@
 
   .walk-sidebar .info-card:last-child {
     margin-bottom: 0;
+  }
+
+  .panel-card {
+    padding: 0.75rem;
+  }
+
+  .breaker-actions {
+    align-items: stretch;
+  }
+
+  .breaker-slot {
+    grid-template-columns: 5rem minmax(0, 1fr);
+  }
+
+  .breaker-actions {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-top: 1px solid #777;
   }
 }
