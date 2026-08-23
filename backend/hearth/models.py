@@ -12,8 +12,8 @@ class Room(Base):
     floor: Mapped[str] = mapped_column(nullable=False)
     # List of [x, y] pairs in the floor's shared coordinate space.
     polygon: Mapped[list[list[float]]] = mapped_column(JSON, nullable=False)
-    # Ordered wall-walk + placement that produced `polygon`; opaque to the backend,
-    # kept so a mismeasured wall is correctable without hand-editing vertices.
+    # Ordered wall-walk + placement that produced `polygon`; validated at the API
+    # boundary and kept so a bad measurement is correctable without editing vertices.
     measurement_source: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     panels: Mapped[list["Panel"]] = relationship(back_populates="room")

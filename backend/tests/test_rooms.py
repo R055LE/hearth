@@ -84,3 +84,52 @@ def test_create_room_without_measurement_source(client):
     )
     assert resp.status_code == 201
     assert resp.json()["measurement_source"] is None
+
+
+def test_rejects_malformed_measurement_source(client):
+    resp = client.post(
+        "/rooms",
+        json={
+            "name": "Garage",
+            "floor": "main",
+            "polygon": [[0, 0], [10, 0], [10, 10]],
+            "measurement_source": {},
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+def test_patch_rejects_null_required_field(client):
+    room = client.post(
+        "/rooms", json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0]]}
+    ).json()
+
+    resp = client.patch(f"/rooms/{room['id']}", json={"name": None})
+
+    assert resp.status_code == 422
+
+
+def test_delete_room_with_circuit_point_returns_conflict(client):
+    room = client.post(
+        "/rooms", json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0]]}
+    ).json()
+    panel = client.post("/panels", json={"name": "Main Panel"}).json()
+    circuit = client.post(
+        "/circuits", json={"panel_id": panel["id"], "breaker_label": "1"}
+    ).json()
+    client.post(
+        "/circuit-points",
+        json={
+            "circuit_id": circuit["id"],
+            "room_id": room["id"],
+            "kind": "outlet",
+            "x": 1,
+            "y": 1,
+        },
+    )
+
+    resp = client.delete(f"/rooms/{room['id']}")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Room still has circuit points"
