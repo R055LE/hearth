@@ -7,38 +7,74 @@ RUN npm ci
 COPY frontend ./
 RUN npm run build
 
-FROM python:3.14-slim@sha256:a7fb1e634c4a578f9e0bd6327f11a3cde11b7a9395f48e24360c0988bcc5c2bc
+# The builder's python minor version must match the runtime's exactly. Wheels with
+# compiled extensions are tagged for one ABI, and hearth ships two of them
+# (pydantic-core, uvloop), so a mismatch produces a site-packages the runtime cannot
+# import. 3.13-slim is paired with distroless python3-debian13 for that reason.
+#
+# This is a downgrade from 3.14. requires-python is >=3.12 so the code is fine, and
+# CI derives its matrix from this line, so the tests follow the runtime down.
+FROM python:3.13-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6 AS builder
+WORKDIR /build
 
-# Non-root runtime user with a fixed uid/gid so the host can chown the bind-mounted /data
-# to match. The app writes only to /data (volume), so the rootfs is read-only.
-RUN groupadd --system --gid 10001 hearth \
- && useradd --system --uid 10001 --gid 10001 --home-dir /app --no-create-home hearth
+# Install the dependency set recorded in uv.lock into a prefix that can be copied
+# wholesale into the final stage. Resolving pyproject ranges independently here made
+# the committed lockfile decorative and allowed repeat builds of one commit to differ.
+COPY backend/requirements-uv.txt ./requirements-uv.txt
+RUN pip install --no-cache-dir --requirement requirements-uv.txt
+COPY backend/pyproject.toml backend/uv.lock backend/README.md ./
+COPY backend/hearth ./hearth
+RUN UV_PROJECT_ENVIRONMENT=/install uv sync --frozen --no-dev --no-editable
+
+# /data has to exist in the image with the right ownership before the bind mount lands.
+# There is no shell in the final stage to mkdir with, so it gets built here and copied.
+RUN mkdir -p /skeleton/data && chown 65532:65532 /skeleton/data
+
+# Distroless: no shell, no package manager, no coreutils. The findings this removes were
+# entirely OS packages the runtime never calls, unfixable by patching because Debian had
+# no fix released. Removing the packages removes the finding, which is the honest
+# resolution rather than suppressing it.
+#
+# Consequences, all deliberate:
+#   - No shell, so CMD and HEALTHCHECK are exec-array form and the entrypoint that ran
+#     migrations before startup is now backend/hearth/entrypoint.py.
+#   - The runtime user is the image's built-in nonroot (65532), not hearth (10001).
+#     groupadd and useradd no longer exist. **The /data bind mount on the deploy host
+#     must be chowned to 65532 or the container cannot write its database.**
+#   - Debugging is `docker cp` and logs, not `docker exec sh`.
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:eff0a6050f5ea9e8154c3d137d468901864803ce3c7f4657d419e64f3f1f8b40
+
+# Distroless python has no site-packages on sys.path and no /usr/local. Copying the
+# prefix to /usr/local, the usual slim-image pattern, puts dependencies where the
+# interpreter never looks: the image builds, starts, and only breaks when something
+# imports one. Both paths are declared here rather than inferred.
+#
+# /app precedes site-packages so `import hearth` resolves to the source tree, which is
+# what main.py's FRONTEND_DIST walks up from to find ./static.
+COPY --from=builder --chown=nonroot:nonroot /install/lib/python3.13/site-packages /app/site-packages
+ENV PYTHONPATH=/app:/app/site-packages
 
 WORKDIR /app
 
-# Install the package (deps are pinned in pyproject.toml).
-COPY backend/pyproject.toml backend/README.md ./
-COPY backend/hearth ./hearth
-COPY backend/alembic.ini ./alembic.ini
-COPY backend/alembic ./alembic
-# pip is a build-time tool here; nothing at runtime shells out to it. Removing it after the
-# install drops pip's vendored bundle from the shipped image, along with the CycloneDX SBOM
-# pip publishes about that bundle. Trivy reads that SBOM as installed inventory, so it was
-# reporting vendored packages the image doesn't expose as if they were app dependencies.
-RUN pip install --no-cache-dir . \
- && python -m pip uninstall -y pip
+COPY --from=builder --chown=nonroot:nonroot /build/hearth ./hearth
+COPY --chown=nonroot:nonroot backend/alembic.ini ./alembic.ini
+COPY --chown=nonroot:nonroot backend/alembic ./alembic
+COPY --from=frontend-build --chown=nonroot:nonroot /app/dist ./static
+COPY --from=builder --chown=nonroot:nonroot /skeleton/data /data
 
-COPY --from=frontend-build /app/dist ./static
+# Declared explicitly even though the base image already defaults to it, so the
+# guarantee is visible here and survives a base image change.
+USER nonroot
 
-RUN mkdir -p /data && chown hearth:hearth /data
-
-USER hearth
 ENV PYTHONUNBUFFERED=1
 ENV DB_PATH=/data/hearth.db
 
+EXPOSE 8000
+
+# Exec-array form: no shell exists to interpret a string command.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/rooms')"]
+  CMD ["/usr/bin/python3.13", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/rooms')"]
 
 # Migrations run at container start (not at build time) so the schema always matches
-# whatever DB_PATH volume is actually mounted.
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn hearth.main:app --host 0.0.0.0 --port 8000"]
+# whatever DB_PATH volume is actually mounted. entrypoint.py does that and then serves.
+ENTRYPOINT ["/usr/bin/python3.13", "-m", "hearth.entrypoint"]

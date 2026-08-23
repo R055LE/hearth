@@ -126,7 +126,7 @@ export function RoomBuilder({
     if (!editingRoom) return;
     api.floorplan.get(editingRoom.floor).then((fp) => {
       setCircuitPointCount(fp.circuit_points.filter((p) => p.room_id === editingRoom.id).length);
-    });
+    }).catch((err) => setError(String(err)));
   }, [editingRoom]);
 
   const roomsOnFloor = useMemo(() => allRooms.filter((r) => r.floor === floor), [allRooms, floor]);
@@ -220,6 +220,44 @@ export function RoomBuilder({
 
   function undoLastWall() {
     setWalls((w) => w.slice(0, -1));
+  }
+
+  function updateWallLength(index: number, part: 'feet' | 'inches', value: number) {
+    if (!Number.isFinite(value) || value < 0) return;
+    setWalls((current) =>
+      current.map((wall, wallIndex) => {
+        if (wallIndex !== index) return wall;
+        const feet = Math.floor(wall.length_in / 12);
+        const inches = wall.length_in - feet * 12;
+        return {
+          ...wall,
+          length_in: part === 'feet' ? value * 12 + inches : feet * 12 + value,
+        };
+      }),
+    );
+  }
+
+  function updateWallTurn(index: number, value: 'left' | 'right' | 'straight' | 'custom') {
+    setWalls((current) =>
+      current.map((wall, wallIndex) => {
+        if (wallIndex !== index) return wall;
+        if (value !== 'custom') return { ...wall, turn: value };
+        return { ...wall, turn: typeof wall.turn === 'string' ? { deg: 0 } : wall.turn };
+      }),
+    );
+  }
+
+  function updateCustomTurn(index: number, value: number) {
+    if (!Number.isFinite(value)) return;
+    setWalls((current) =>
+      current.map((wall, wallIndex) =>
+        wallIndex === index ? { ...wall, turn: { deg: value } } : wall,
+      ),
+    );
+  }
+
+  function removeWall(index: number) {
+    setWalls((current) => current.filter((_, wallIndex) => wallIndex !== index));
   }
 
   async function submit(e: React.FormEvent) {
@@ -387,9 +425,55 @@ export function RoomBuilder({
           <legend>Walls</legend>
           <ul className="wall-list">
             {walls.map((w, i) => (
-              <li key={i}>
-                {(w.length_in / 12).toFixed(2)}ft, turn{' '}
-                {typeof w.turn === 'string' ? w.turn : `${w.turn.deg}°`}
+              <li key={i} className="wall-row">
+                <strong>Wall {i + 1}</strong>
+                <label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    aria-label={`Wall ${i + 1} feet`}
+                    value={Math.floor(w.length_in / 12)}
+                    onChange={(e) => updateWallLength(i, 'feet', e.target.valueAsNumber)}
+                  />{' '}
+                  ft
+                </label>
+                <label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    aria-label={`Wall ${i + 1} inches`}
+                    value={Number((w.length_in % 12).toFixed(2))}
+                    onChange={(e) => updateWallLength(i, 'inches', e.target.valueAsNumber)}
+                  />{' '}
+                  in
+                </label>
+                <select
+                  aria-label={`Wall ${i + 1} turn`}
+                  value={typeof w.turn === 'string' ? w.turn : 'custom'}
+                  onChange={(e) => updateWallTurn(i, e.target.value as 'left' | 'right' | 'straight' | 'custom')}
+                >
+                  <option value="left">Turn left</option>
+                  <option value="right">Turn right</option>
+                  <option value="straight">Straight</option>
+                  <option value="custom">Custom angle</option>
+                </select>
+                {typeof w.turn !== 'string' && (
+                  <label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      aria-label={`Wall ${i + 1} custom turn degrees`}
+                      value={w.turn.deg}
+                      onChange={(e) => updateCustomTurn(i, e.target.valueAsNumber)}
+                    />{' '}
+                    deg
+                  </label>
+                )}
+                <button type="button" onClick={() => removeWall(i)}>
+                  Remove wall {i + 1}
+                </button>
               </li>
             ))}
           </ul>

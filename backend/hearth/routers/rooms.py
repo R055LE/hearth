@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from hearth import models, schemas
 from hearth.database import get_db
+from hearth.routers._database import commit_or_conflict
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 
@@ -16,7 +17,7 @@ def list_rooms(db: Session = Depends(get_db)):
 def create_room(room: schemas.RoomCreate, db: Session = Depends(get_db)):
     db_room = models.Room(**room.model_dump())
     db.add(db_room)
-    db.commit()
+    commit_or_conflict(db, "Room could not be created")
     db.refresh(db_room)
     return db_room
 
@@ -36,7 +37,7 @@ def update_room(room_id: int, room: schemas.RoomUpdate, db: Session = Depends(ge
         raise HTTPException(status_code=404, detail="Room not found")
     for field, value in room.model_dump(exclude_unset=True).items():
         setattr(db_room, field, value)
-    db.commit()
+    commit_or_conflict(db, "Room could not be updated")
     db.refresh(db_room)
     return db_room
 
@@ -46,5 +47,7 @@ def delete_room(room_id: int, db: Session = Depends(get_db)):
     db_room = db.get(models.Room, room_id)
     if db_room is None:
         raise HTTPException(status_code=404, detail="Room not found")
+    if db.query(models.CircuitPoint).filter(models.CircuitPoint.room_id == room_id).first():
+        raise HTTPException(status_code=409, detail="Room still has circuit points")
     db.delete(db_room)
-    db.commit()
+    commit_or_conflict(db, "Room is still referenced")

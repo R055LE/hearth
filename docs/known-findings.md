@@ -1,129 +1,85 @@
 # Known findings
 
-CRITICAL and HIGH CVEs currently present in the published image, why they
-haven't been fixed, and what would fix them.
+CRITICAL and HIGH vulnerabilities currently reported for the published image,
+why they do not block release today, and what would change that decision.
 
-Per runbook `decisions/0011`: everything the scanner finds stays visible, and
-only a subset blocks a release. Nothing here is suppressed. `release.yml` prints
-all of these on every run and blocks on the ones with a fix available.
+Per runbook `decisions/0011`, the release workflow prints every finding and only
+blocks on findings with a fix available. Nothing listed here is suppressed from
+the report.
 
-**These were invisible until 2026-08-08.** The release gate ran a single Trivy
-scan with `ignore-unfixed: true`, which filters unfixable findings out of the
-*output*, not just out of the blocking decision. The workflow reported a clean
-scan while the image carried 23 findings, 4 of them CRITICAL. The gate was not
-wrong about what it blocked on. It was silent about everything else, and silence
-read as safety.
+## Measured baseline
 
-## Summary
+Measured 2026-08-10 against the immutable distroless image digest published from
+commit `46018df`:
 
-23 findings, 12 unique CVEs, none with a Debian fix released.
+```
+trivy image --image-src remote --severity CRITICAL,HIGH \
+  ghcr.io/r055le/hearth@sha256:dceee0b0a14faa8e92f9ee9bfacea3c0bcab69d31c728ebff97d9ddef6e381bd
+```
+
+`--image-src remote` is load-bearing when scanning a registry tag from a deploy
+host. Without it, Trivy may prefer a stale image with the same tag in the local
+Docker daemon. That happened during the review which produced this update: a
+scan labelled `ghcr.io/r055le/hearth:main` reported the retired slim image until
+the registry digest and release log were checked independently.
+
+Summary: 15 HIGH findings, 5 unique CVEs, zero CRITICAL, and no fixed versions
+available in Debian 13 at measurement time.
 
 | cluster | CVEs | findings | worst |
-|---|---|---|---|
-| `perl-base` | 6 | 6 | **CRITICAL** ×4 |
-| `util-linux` family | 1 | 9 | HIGH |
-| `ncurses` | 1 | 4 | HIGH |
-| `gzip` | 1 | 1 | HIGH |
-| `libacl1` | 1 | 1 | HIGH |
+|---|---:|---:|---:|
+| Python 3.13 stdlib | 3 | 12 | HIGH |
+| ncurses libraries | 1 | 2 | HIGH |
+| util-linux library | 1 | 1 | HIGH |
 
-## The honest summary
+The previous `python:3.14-slim` runtime reported 23 findings including four
+CRITICAL findings in `perl-base`. Moving the final stage to distroless removed
+Perl, gzip, and most of util-linux from the runtime. It also made Debian's Python
+packages visible to the scanner, so interpreter findings which the application
+does not exercise are now explicit rather than absent from inventory.
 
-**Every one of these comes from the Debian base image, and none of them is
-code hearth calls.** The application is FastAPI and SQLAlchemy behind uvicorn.
-It does not invoke perl, does not read partition tables, does not use a
-terminal, and does not shell out to gzip.
+## Python 3.13 stdlib
 
-That is an argument about reachability, not about absence, and it is weaker than
-it sounds. Verified in the published image on 2026-08-08:
+`CVE-2026-11940`, `CVE-2026-15308`, and `CVE-2026-7210` are each reported
+against four Debian packages, producing 12 findings for three defects.
 
-```
-infocmp  PRESENT     perl     PRESENT
-tic      PRESENT     gzip     PRESENT
-tput     PRESENT     mount    PRESENT
-```
+The affected code paths are tar extraction filters, the HTML parser, and Expat
+XML parsing. The running Hearth service exposes no upload, archive extraction,
+HTML parsing, or XML parsing endpoint. The drawio importer uses `defusedxml`, is
+a local command-line tool, and is not copied into the runtime image.
 
-Every vulnerable program is on disk, not merely a linked library. This is the
-opposite of the distroless lab images, where the same ncurses CVE is genuinely
-unreachable because `infocmp` does not exist in the image at all. Here, an
-attacker who achieves execution in the container has perl and a working
-toolchain of shell utilities available. "The application doesn't call it" is a
-statement about the application, not about what an attacker can reach.
+This is an application-specific reachability statement. It must be revisited if
+Hearth gains file uploads, archive handling, HTML ingestion, or XML parsing. A
+Debian fixed version would make the release gate block automatically.
 
-**The real fix is a base image that doesn't ship them.** `container-hardening-lab`
-took its python image from 11 findings to 1 by moving the final stage to
-distroless, which removes perl, util-linux, ncurses and gzip outright rather
-than arguing they're unreachable. hearth should follow. Tracked separately;
-until then this file is the record rather than the resolution.
+## ncurses libraries
 
----
+`CVE-2025-69720` is reported against `libncursesw6` and `libtinfo6`. Hearth is a
+headless HTTP service and does not use terminal capability parsing. Distroless
+also removes the shell and interactive debugging path that made the old slim
+image's terminal utilities useful to an attacker after code execution.
 
-## `perl-base` — 6 CVEs, 4 CRITICAL
+The packages remain present, so this is weaker evidence than proving the
+vulnerable code is absent. Keep the finding visible until the base image removes
+it or Debian publishes a fix.
 
-`CVE-2026-13221`, `CVE-2026-42496`, `CVE-2026-57433`, `CVE-2026-8376`
-(CRITICAL), `CVE-2026-42497`, `CVE-2026-48962`, `CVE-2026-57432`,
-`CVE-2026-9538` (HIGH). No fix released.
+## util-linux library
 
-**Why it's here at all:** `python:3.14-slim` ships `perl-base` as part of the
-Debian base. Nothing in hearth uses it.
+`CVE-2026-53615` is reported against `libuuid1`. The defect is in DOS partition
+table parsing. The container has no block devices and Hearth does not parse
+partition tables.
 
-**Why it isn't blocking a deploy today:** no fix exists to apply, and the
-runtime has no path that invokes perl.
+The package remains part of the distroless base. Keep the finding visible until
+the base removes it or Debian publishes a fix.
 
-**Why that's an uncomfortable answer:** these are the highest-severity findings
-in the image, and "the app doesn't call it" is a statement about the app, not
-about the attack surface. `container-hardening-lab`'s Debian-based images used
-to force-purge the dpkg record with
-`dpkg --purge --force-depends --force-remove-essential perl-base`, because
-`apt remove` won't take it and deleting the binary leaves the package registered
-where scanners still see it. That is available as an interim if a distroless
-migration is delayed.
+## Review triggers
 
-**Resolved by:** a distroless base, or purging `perl-base` as above.
+Re-run the remote digest scan and update this file when any of these changes:
 
-## `util-linux` family — `CVE-2026-53615`, 9 findings
+- the distroless base digest;
+- Debian publishes a fixed version;
+- Hearth adds an input path which reaches one of the affected parsers; or
+- the release scan reports a different HIGH/CRITICAL inventory.
 
-`bsdutils`, `libblkid1`, `liblastlog2-2`, `libmount1`, `libsmartcols1`,
-`libuuid1`, `login`, `mount`, `util-linux`. No fix released.
-
-Integer overflow in `libblkid/src/partitions/dos.c`, reached when parsing a DOS
-partition table. This container has no block devices and never calls the
-partition parser.
-
-Nine findings, one defect — Debian splits util-linux across many packages, so
-the count overstates the problem. Finding counts are a poor proxy for risk.
-
-**Resolved by:** a Debian fix, or a base image that doesn't ship util-linux.
-
-## `ncurses` — `CVE-2025-69720`, 4 findings
-
-`libncursesw6`, `libtinfo6`, `ncurses-base`, `ncurses-bin`. No fix released.
-
-Stack overflow in `analyze_string` in `progs/infocmp.c`.
-
-**Verified 2026-08-08: `infocmp`, `tic` and `tput` are all present in this
-image.** In the distroless lab images they are absent, which makes the
-"vulnerable code isn't here" argument a fact. Here it is not available: the
-vulnerable program ships.
-
-**Resolved by:** a Debian fix, or a base without ncurses.
-
-## `gzip` — `CVE-2026-41992`, 1 finding
-
-No fix released. The application does not shell out to gzip, and Python's `gzip`
-module is stdlib rather than a wrapper around this binary. The binary is present
-regardless (verified above).
-
-## `libacl1` — `CVE-2026-54369`, 1 finding
-
-No fix released. POSIX ACL library, pulled in transitively. Nothing in hearth
-manipulates ACLs.
-
----
-
-## Review
-
-The right trigger for revisiting this file is a base image change, not a
-calendar reminder. If hearth moves to distroless, most of this file should
-disappear rather than be re-justified. If it hasn't moved and Debian has shipped
-fixes, the release will start blocking on them by itself, which is the gate
-working as intended.
+Finding counts and severities are a measured snapshot. The release output is
+the current operational record.
