@@ -1,57 +1,96 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { Circuit, Panel, Room } from '../types';
+import type { Circuit, CircuitPoint, Panel, Room } from '../types';
 
-export function PanelEditor() {
+export function PanelEditor({
+  onViewCircuit,
+}: {
+  onViewCircuit: (circuitId: number, floor: string) => void;
+}) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [circuits, setCircuits] = useState<Circuit[]>([]);
+  const [circuitPoints, setCircuitPoints] = useState<CircuitPoint[]>([]);
 
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState<number | ''>('');
   const [amperage, setAmperage] = useState('');
   const [fedFrom, setFedFrom] = useState<number | ''>('');
+  const [error, setError] = useState<string | null>(null);
 
   function refresh() {
-    api.panels.list().then(setPanels);
-    api.circuits.list().then(setCircuits);
+    Promise.all([
+      api.panels.list(),
+      api.rooms.list(),
+      api.circuits.list(),
+      api.circuitPoints.list(),
+    ])
+      .then(([panelList, roomList, circuitList, pointList]) => {
+        setPanels(panelList);
+        setRooms(roomList);
+        setCircuits(circuitList);
+        setCircuitPoints(pointList);
+        setError(null);
+      })
+      .catch((err) => setError(String(err)));
   }
 
   useEffect(() => {
-    api.rooms.list().then(setRooms);
     refresh();
   }, []);
 
   async function createPanel(e: React.FormEvent) {
     e.preventDefault();
-    await api.panels.create({
-      name,
-      room_id: roomId === '' ? null : roomId,
-      amperage: amperage === '' ? null : Number(amperage),
-      fed_from_panel_id: fedFrom === '' ? null : fedFrom,
-    });
-    setName('');
-    setAmperage('');
-    refresh();
+    try {
+      await api.panels.create({
+        name,
+        room_id: roomId === '' ? null : roomId,
+        amperage: amperage === '' ? null : Number(amperage),
+        fed_from_panel_id: fedFrom === '' ? null : fedFrom,
+      });
+      setName('');
+      setAmperage('');
+      setError(null);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function deletePanel(id: number) {
-    await api.panels.remove(id);
-    refresh();
+    if (!window.confirm('Delete this panel? This cannot be undone.')) return;
+    try {
+      await api.panels.remove(id);
+      setError(null);
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function viewCircuit(circuitId: number) {
+    const point = circuitPoints.find((candidate) => candidate.circuit_id === circuitId);
+    const floor = rooms.find((room) => room.id === point?.room_id)?.floor;
+    if (floor) onViewCircuit(circuitId, floor);
   }
 
   return (
-    <div>
-      <h2>Panels &amp; circuits</h2>
+    <section aria-labelledby="panels-heading">
+      <h2 id="panels-heading">Panels &amp; circuits</h2>
+      {error && <p className="error">{error}</p>}
       {panels.map((panel) => (
         <PanelCard
           key={panel.id}
           panel={panel}
-          room={rooms.find((r) => r.id === panel.room_id)}
-          fedFromName={panels.find((p) => p.id === panel.fed_from_panel_id)?.name}
-          circuits={circuits.filter((c) => c.panel_id === panel.id)}
+          room={rooms.find((room) => room.id === panel.room_id)}
+          fedFromName={panels.find((candidate) => candidate.id === panel.fed_from_panel_id)?.name}
+          feedsPanels={panels.filter((candidate) => candidate.fed_from_panel_id === panel.id)}
+          circuits={circuits.filter((circuit) => circuit.panel_id === panel.id)}
+          circuitPoints={circuitPoints}
+          onViewCircuit={viewCircuit}
           onDeletePanel={() => deletePanel(panel.id)}
           onChange={refresh}
+          onError={setError}
         />
       ))}
 
@@ -64,9 +103,9 @@ export function PanelEditor() {
           Location:{' '}
           <select value={roomId} onChange={(e) => setRoomId(e.target.value ? Number(e.target.value) : '')}>
             <option value="">(none)</option>
-            {rooms.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
+            {rooms.map((room) => (
+              <option key={room.id} value={room.id}>
+                {room.name}
               </option>
             ))}
           </select>
@@ -78,16 +117,16 @@ export function PanelEditor() {
           Fed from (subpanel of):{' '}
           <select value={fedFrom} onChange={(e) => setFedFrom(e.target.value ? Number(e.target.value) : '')}>
             <option value="">(main panel)</option>
-            {panels.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
+            {panels.map((panel) => (
+              <option key={panel.id} value={panel.id}>
+                {panel.name}
               </option>
             ))}
           </select>
         </label>
         <button type="submit">Create panel</button>
       </form>
-    </div>
+    </section>
   );
 }
 
@@ -95,16 +134,24 @@ function PanelCard({
   panel,
   room,
   fedFromName,
+  feedsPanels,
   circuits,
+  circuitPoints,
+  onViewCircuit,
   onDeletePanel,
   onChange,
+  onError,
 }: {
   panel: Panel;
   room?: Room;
   fedFromName?: string;
+  feedsPanels: Panel[];
   circuits: Circuit[];
+  circuitPoints: CircuitPoint[];
+  onViewCircuit: (circuitId: number) => void;
   onDeletePanel: () => void;
   onChange: () => void;
+  onError: (message: string | null) => void;
 }) {
   const [breakerLabel, setBreakerLabel] = useState('');
   const [circuitAmperage, setCircuitAmperage] = useState('');
@@ -112,64 +159,127 @@ function PanelCard({
   const [stickerText, setStickerText] = useState('');
   const [verifiedDescription, setVerifiedDescription] = useState('');
 
+  const sortedCircuits = [...circuits].sort((left, right) =>
+    left.breaker_label.localeCompare(right.breaker_label, undefined, { numeric: true }),
+  );
+  const pointCount = (circuitId: number) =>
+    circuitPoints.filter((point) => point.circuit_id === circuitId).length;
+  const mappedCircuitCount = circuits.filter((circuit) => pointCount(circuit.id) > 0).length;
+  const mappedPointCount = circuits.reduce((total, circuit) => total + pointCount(circuit.id), 0);
+  const unverifiedCount = circuits.filter((circuit) => !circuit.verified_description).length;
+
   async function createCircuit(e: React.FormEvent) {
     e.preventDefault();
-    await api.circuits.create({
-      panel_id: panel.id,
-      breaker_label: breakerLabel,
-      amperage: circuitAmperage === '' ? null : Number(circuitAmperage),
-      poles: Number(poles),
-      panel_sticker_text: stickerText || null,
-      verified_description: verifiedDescription || null,
-    });
-    setBreakerLabel('');
-    setCircuitAmperage('');
-    setStickerText('');
-    setVerifiedDescription('');
-    onChange();
+    try {
+      await api.circuits.create({
+        panel_id: panel.id,
+        breaker_label: breakerLabel,
+        amperage: circuitAmperage === '' ? null : Number(circuitAmperage),
+        poles: Number(poles),
+        panel_sticker_text: stickerText || null,
+        verified_description: verifiedDescription || null,
+      });
+      setBreakerLabel('');
+      setCircuitAmperage('');
+      setStickerText('');
+      setVerifiedDescription('');
+      onError(null);
+      onChange();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function deleteCircuit(id: number) {
-    await api.circuits.remove(id);
-    onChange();
+    if (!window.confirm('Delete this circuit? This cannot be undone.')) return;
+    try {
+      await api.circuits.remove(id);
+      onError(null);
+      onChange();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
-    <div className="panel-card">
-      <div className="panel-card-header">
-        <strong>{panel.name}</strong>
-        {panel.amperage && <span> ({panel.amperage}A)</span>}
-        {room && <span> — {room.name}</span>}
-        {fedFromName && <span> — fed from {fedFromName}</span>}
-        <button onClick={onDeletePanel}>Delete panel</button>
+    <section className="panel-card" aria-labelledby={`panel-${panel.id}-heading`}>
+      <header className="panel-card-header">
+        <div>
+          <h3 id={`panel-${panel.id}-heading`}>
+            {panel.name}
+            {panel.amperage && <span className="panel-amperage"> {panel.amperage}A</span>}
+          </h3>
+          <p className="panel-location">Location: {room?.name ?? 'not recorded'}</p>
+          <p className="panel-feed">
+            {fedFromName ? `Fed from ${fedFromName}.` : 'No parent panel recorded.'}
+            {feedsPanels.length > 0 && ` Feeds ${feedsPanels.map((child) => child.name).join(', ')}.`}
+          </p>
+        </div>
+        <button type="button" onClick={onDeletePanel}>Delete panel</button>
+      </header>
+
+      <p className="panel-coverage" aria-label={`${panel.name} mapping coverage`}>
+        <span>{circuits.length} {circuits.length === 1 ? 'circuit' : 'circuits'}</span>
+        <span>{mappedCircuitCount} with mapped points</span>
+        <span>{mappedPointCount} total points</span>
+        <span>{unverifiedCount} need verification</span>
+      </p>
+
+      <div className="breaker-directory" role="region" aria-label={`${panel.name} breaker directory`}>
+        {sortedCircuits.length === 0 ? (
+          <p>No circuits in this panel yet.</p>
+        ) : (
+          sortedCircuits.map((circuit) => {
+            const mappedPoints = pointCount(circuit.id);
+            const verified = Boolean(circuit.verified_description);
+            const title =
+              circuit.verified_description ?? circuit.panel_sticker_text ?? 'Unlabeled circuit';
+            return (
+              <article
+                key={circuit.id}
+                className={`breaker-slot${mappedPoints === 0 ? ' unmapped' : ''}`}
+                style={{ minHeight: `${Math.max(circuit.poles, 1) * 5}rem` }}
+                data-poles={circuit.poles}
+              >
+                <div className="breaker-handle">
+                  <small>Breaker</small>
+                  <strong>{circuit.breaker_label}</strong>
+                  <small>{circuit.poles} pole{circuit.poles === 1 ? '' : 's'}</small>
+                </div>
+                <div className="breaker-details">
+                  <h4>{title}</h4>
+                  {circuit.amperage && <p>{circuit.amperage}A</p>}
+                  {circuit.verified_description && circuit.panel_sticker_text && (
+                    <p>Panel says: {circuit.panel_sticker_text}</p>
+                  )}
+                  <div className="status-badges">
+                    <span className={`status-badge ${mappedPoints > 0 ? 'mapped' : 'warning'}`}>
+                      {mappedPoints > 0
+                        ? `${mappedPoints} mapped point${mappedPoints === 1 ? '' : 's'}`
+                        : 'Unmapped'}
+                    </span>
+                    <span className={`status-badge ${verified ? 'verified' : 'warning'}`}>
+                      {verified ? 'Verified' : 'Needs verification'}
+                    </span>
+                  </div>
+                </div>
+                <div className="breaker-actions">
+                  <button
+                    type="button"
+                    onClick={() => onViewCircuit(circuit.id)}
+                    disabled={mappedPoints === 0}
+                  >
+                    View breaker {circuit.breaker_label} on floorplan
+                  </button>
+                  <button type="button" onClick={() => deleteCircuit(circuit.id)}>Delete</button>
+                </div>
+              </article>
+            );
+          })
+        )}
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Breaker</th>
-            <th>Amps</th>
-            <th>Poles</th>
-            <th>Panel says</th>
-            <th>Confirmed</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {circuits.map((circuit) => (
-            <tr key={circuit.id}>
-              <td>{circuit.breaker_label}</td>
-              <td>{circuit.amperage ?? ''}</td>
-              <td>{circuit.poles}</td>
-              <td>{circuit.panel_sticker_text}</td>
-              <td>{circuit.verified_description}</td>
-              <td>
-                <button onClick={() => deleteCircuit(circuit.id)}>Delete</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <form onSubmit={createCircuit} className="inline-form">
+
+      <form onSubmit={createCircuit} className="inline-form circuit-form">
         <input
           placeholder="Breaker # (e.g. 12)"
           value={breakerLabel}
@@ -198,6 +308,6 @@ function PanelCard({
         />
         <button type="submit">Add circuit</button>
       </form>
-    </div>
+    </section>
   );
 }
