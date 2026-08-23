@@ -77,3 +77,9 @@ Fleet-wide decisions that govern this repo live in
 [`R055LE/runbook/decisions`](https://github.com/R055LE/runbook/tree/main/decisions),
 indexed in that directory's README. `0009` is the one that explains why
 dependency automation here is Dependabot and nothing else.
+
+## Claude Code specifics
+
+`CLAUDE.md` is a symlink to this file, per `decisions/0012`. Fleet-wide
+conventions — the symlink mechanics, the PR/merge recipe — live in the
+mirror root's `AGENTS.md`, see `decisions/0023`.
