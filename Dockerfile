@@ -42,7 +42,7 @@ RUN mkdir -p /skeleton/data && chown 65532:65532 /skeleton/data
 #     groupadd and useradd no longer exist. **The /data bind mount on the deploy host
 #     must be chowned to 65532 or the container cannot write its database.**
 #   - Debugging is `docker cp` and logs, not `docker exec sh`.
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:1c680cdb442a9e7a89f64fd1706367c62302ea1f9ab80fdebdb72ae9fcded46f
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:eff0a6050f5ea9e8154c3d137d468901864803ce3c7f4657d419e64f3f1f8b40
 
 # Distroless python has no site-packages on sys.path and no /usr/local. Copying the
 # prefix to /usr/local, the usual slim-image pattern, puts dependencies where the
