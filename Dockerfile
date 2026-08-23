@@ -1,6 +1,6 @@
 # Pinned by digest (not just the moving tag) so builds are reproducible; Dependabot bumps
 # the digest + comment on a new base release. Tags retained for readability.
-FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS frontend-build
+FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS frontend-build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
