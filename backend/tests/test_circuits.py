@@ -79,3 +79,20 @@ def test_circuit_point_links_circuit_and_room(client):
     point = resp.json()
     assert point["circuit_id"] == circuit["id"]
     assert point["room_id"] == room["id"]
+
+
+def test_delete_panel_feeding_subpanel_returns_conflict(client):
+    main_panel = _make_panel(client)
+    _make_panel(client, name="Garage Subpanel", fed_from_panel_id=main_panel["id"])
+
+    resp = client.delete(f"/panels/{main_panel['id']}")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Panel still feeds another panel"
+
+
+def test_create_circuit_with_missing_panel_returns_conflict(client):
+    resp = client.post("/circuits", json={"panel_id": 999, "breaker_label": "1"})
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Circuit references a missing panel"

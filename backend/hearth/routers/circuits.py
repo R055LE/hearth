@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from hearth import models, schemas
 from hearth.database import get_db
+from hearth.routers._database import commit_or_conflict
 
 router = APIRouter(prefix="/circuits", tags=["circuits"])
 
@@ -16,7 +17,7 @@ def list_circuits(db: Session = Depends(get_db)):
 def create_circuit(circuit: schemas.CircuitCreate, db: Session = Depends(get_db)):
     db_circuit = models.Circuit(**circuit.model_dump())
     db.add(db_circuit)
-    db.commit()
+    commit_or_conflict(db, "Circuit references a missing panel")
     db.refresh(db_circuit)
     return db_circuit
 
@@ -38,7 +39,7 @@ def update_circuit(
         raise HTTPException(status_code=404, detail="Circuit not found")
     for field, value in circuit.model_dump(exclude_unset=True).items():
         setattr(db_circuit, field, value)
-    db.commit()
+    commit_or_conflict(db, "Circuit references a missing panel")
     db.refresh(db_circuit)
     return db_circuit
 
@@ -49,4 +50,4 @@ def delete_circuit(circuit_id: int, db: Session = Depends(get_db)):
     if db_circuit is None:
         raise HTTPException(status_code=404, detail="Circuit not found")
     db.delete(db_circuit)
-    db.commit()
+    commit_or_conflict(db, "Circuit could not be deleted")
