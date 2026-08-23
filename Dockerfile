@@ -14,7 +14,7 @@ RUN npm run build
 #
 # This is a downgrade from 3.14. requires-python is >=3.12 so the code is fine, and
 # CI derives its matrix from this line, so the tests follow the runtime down.
-FROM python:3.13-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6 AS builder
+FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4 AS builder
 WORKDIR /build
 
 # Install the dependency set recorded in uv.lock into a prefix that can be copied
