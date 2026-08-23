@@ -110,3 +110,7 @@ jobs:
         run: npm run test
       - name: Typecheck + build
         run: npm run build
+      - name: Install browser for end-to-end tests
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end test
+        run: npm run test:e2e

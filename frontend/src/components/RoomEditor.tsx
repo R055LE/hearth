@@ -21,6 +21,7 @@ export function RoomEditor() {
   useEffect(refresh, []);
 
   async function deleteRoom(id: number) {
+    if (!window.confirm('Delete this room? This cannot be undone.')) return;
     try {
       await api.rooms.remove(id);
       if (editingRoom?.id === id) setEditingRoom(null);

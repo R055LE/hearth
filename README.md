@@ -6,6 +6,16 @@ and an interactive floorplan where clicking an outlet/fixture shows its breaker
 scheduling and vendor/quote tracking are planned for later phases — the schema
 is shaped to add them without a rework.
 
+## Screenshots
+
+Desktop floorplan with a selected point and its circuit details:
+
+![Hearth desktop floorplan](docs/screenshots/floorplan-desktop.png)
+
+Circuit-walk capture at phone width:
+
+<img src="docs/screenshots/circuit-walk-mobile.png" alt="Hearth circuit-walk capture on a phone" width="390">
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's put together and why.
 
 ## Layout
@@ -40,8 +50,11 @@ npm run dev
 Open http://localhost:5173 — the Vite dev server proxies `/api` to the
 backend on :8000.
 
-Tests: `cd backend && uv run pytest`. Lint: `uv run ruff check .` (backend),
-`npm run lint` (frontend).
+Backend tests: `cd backend && uv run pytest`. Frontend tests: `cd frontend &&
+npm run test` for unit tests or `npm run test:e2e` for the Chromium browser
+regressions. Install the browser once with `npx playwright install chromium`.
+The browser suite uses synthetic API fixtures and does not need a Hearth
+database. Lint: `uv run ruff check .` (backend), `npm run lint` (frontend).
 
 ## Importing an existing drawio floorplan
 
