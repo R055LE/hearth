@@ -86,7 +86,10 @@ interface ApiState {
   updatedRoom: Record<string, unknown> | null;
 }
 
-async function mockApi(page: Page): Promise<ApiState> {
+async function mockApi(
+  page: Page,
+  options: { rooms?: (typeof room)[] } = {},
+): Promise<ApiState> {
   const state: ApiState = {
     createdRooms: [],
     createdPoints: [],
@@ -96,7 +99,7 @@ async function mockApi(page: Page): Promise<ApiState> {
     updatedPoint: null,
     updatedRoom: null,
   };
-  let storedRooms = [{ ...room }];
+  let storedRooms = (options.rooms ?? [room]).map((storedRoom) => ({ ...storedRoom }));
   let storedPanels = [{ ...panel }, { ...subpanel }];
   let storedCircuits = [{ ...circuit }, { ...secondCircuit }, { ...subpanelCircuit }];
   let storedPoints = [{ ...point }];
@@ -335,6 +338,23 @@ test('makes the floorplan controls keyboard-operable and named', async ({ page }
   await circuitButton.focus();
   await page.keyboard.press('Enter');
   await expect(circuitButton).toHaveClass(/selected/);
+});
+
+test('keeps point placement unavailable until a room exists', async ({ page }) => {
+  await mockApi(page, { rooms: [] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+
+  await expect(page.getByRole('button', { name: 'Add point' })).toBeDisabled();
+  await expect(page.getByText('Add a room before placing points on the floorplan.')).toBeVisible();
+
+  const addRoom = page.getByRole('button', { name: 'Add a room' });
+  await addRoom.focus();
+  await page.keyboard.press('Enter');
+
+  await expect(page.getByRole('heading', { level: 2, name: 'Rooms' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add room', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
 test('shows panel status and opens mapped breakers on the floorplan', async ({ page }) => {
