@@ -77,6 +77,7 @@ const point = {
 };
 
 interface ApiState {
+  createdRooms: Record<string, unknown>[];
   createdPoints: Record<string, unknown>[];
   deletedPointIds: number[];
   updatedCircuit: Record<string, unknown> | null;
@@ -87,6 +88,7 @@ interface ApiState {
 
 async function mockApi(page: Page): Promise<ApiState> {
   const state: ApiState = {
+    createdRooms: [],
     createdPoints: [],
     deletedPointIds: [],
     updatedCircuit: null,
@@ -94,9 +96,11 @@ async function mockApi(page: Page): Promise<ApiState> {
     updatedPoint: null,
     updatedRoom: null,
   };
+  let storedRooms = [{ ...room }];
   let storedPanels = [{ ...panel }, { ...subpanel }];
   let storedCircuits = [{ ...circuit }, { ...secondCircuit }, { ...subpanelCircuit }];
   let storedPoints = [{ ...point }];
+  let nextRoomId = 2;
   let nextPointId = 2;
 
   await page.route('**/api/**', async (route) => {
@@ -105,7 +109,15 @@ async function mockApi(page: Page): Promise<ApiState> {
     const method = request.method();
 
     if (path === '/api/rooms' && method === 'GET') {
-      await route.fulfill({ json: [room] });
+      await route.fulfill({ json: storedRooms });
+      return;
+    }
+    if (path === '/api/rooms' && method === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      const created = { id: nextRoomId++, ...body };
+      state.createdRooms.push(body);
+      storedRooms.push(created as typeof room);
+      await route.fulfill({ status: 201, json: created });
       return;
     }
     if (path === '/api/panels' && method === 'GET') {
@@ -177,7 +189,10 @@ async function mockApi(page: Page): Promise<ApiState> {
     }
     if (path === '/api/rooms/1' && method === 'PATCH') {
       state.updatedRoom = request.postDataJSON() as Record<string, unknown>;
-      await route.fulfill({ json: { ...room, ...state.updatedRoom } });
+      storedRooms = storedRooms.map((stored) =>
+        stored.id === 1 ? ({ ...stored, ...state.updatedRoom } as typeof room) : stored,
+      );
+      await route.fulfill({ json: storedRooms.find((stored) => stored.id === 1) });
       return;
     }
 
@@ -425,6 +440,39 @@ test('keeps add forms hidden until requested and names destructive controls', as
   const addCircuit = mainPanel.getByRole('form', { name: 'Add circuit to Main panel' });
   await expect(addCircuit.getByRole('textbox', { name: 'Breaker label' })).toBeVisible();
   await expect(addCircuit.getByRole('combobox', { name: 'Breaker poles' })).toBeVisible();
+});
+
+test('keeps room creation hidden until requested and collapses it after cancel or save', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Rooms' }).click();
+
+  await expect(page.locator('form')).toHaveCount(0);
+  const addRoom = page.getByRole('button', { name: 'Add room', exact: true });
+  await expect(addRoom).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Actions' })).toBeVisible();
+
+  await addRoom.click();
+  await expect(page.getByRole('heading', { name: 'Add room' })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  expect(state.createdRooms).toEqual([]);
+  await expect(page.locator('form')).toHaveCount(0);
+
+  await addRoom.click();
+  await page.getByRole('textbox', { name: 'Name:' }).fill('Storage');
+  const wallFeet = page.getByPlaceholder('ft');
+  for (let wall = 0; wall < 4; wall += 1) {
+    await wallFeet.fill('10');
+    await page.getByRole('button', { name: 'Add wall' }).click();
+  }
+  await page.getByRole('button', { name: 'Create room' }).click();
+
+  await expect.poll(() => state.createdRooms).toHaveLength(1);
+  await expect(page.getByRole('cell', { name: 'Storage' })).toBeVisible();
+  await expect(page.locator('form')).toHaveCount(0);
+  await expect(addRoom).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
 test('requires confirmation before deleting a point', async ({ page }) => {
