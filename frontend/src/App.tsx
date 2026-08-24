@@ -39,6 +39,7 @@ function App() {
           <FloorplanView
             initialCircuitId={floorplanTarget?.circuitId}
             initialFloor={floorplanTarget?.floor}
+            onOpenRooms={() => setTab('rooms')}
           />
         )}
         {tab === 'rooms' && <RoomEditor />}

@@ -41,9 +41,11 @@ function pointAccessibleLabel(point: CircuitPoint): string {
 export function FloorplanView({
   initialCircuitId,
   initialFloor,
+  onOpenRooms,
 }: {
   initialCircuitId?: number;
   initialFloor?: string;
+  onOpenRooms: () => void;
 }) {
   const [allRooms, setAllRooms] = useState<Room[]>([]);
   const [panels, setPanels] = useState<Panel[]>([]);
@@ -131,6 +133,7 @@ export function FloorplanView({
   }
 
   function startAdd() {
+    if (plan.rooms.length === 0) return;
     if (mode === 'add') {
       finishInteraction();
       return;
@@ -307,7 +310,10 @@ export function FloorplanView({
                 ))}
               </select>
             </label>
-            <button onClick={startAdd} disabled={activeEdit || mode === 'walk'}>
+            <button
+              onClick={startAdd}
+              disabled={activeEdit || mode === 'walk' || plan.rooms.length === 0}
+            >
               {mode === 'add' ? 'Cancel add point' : 'Add point'}
             </button>
             <button
@@ -319,7 +325,10 @@ export function FloorplanView({
           </div>
 
           {plan.rooms.length === 0 ? (
-            <p>No rooms on this floor yet — add some in the Rooms tab.</p>
+            <div>
+              <p>Add a room before placing points on the floorplan.</p>
+              <button type="button" onClick={onOpenRooms}>Add a room</button>
+            </div>
           ) : (
             <svg
               ref={svgRef}
