@@ -79,6 +79,8 @@ const point = {
 interface ApiState {
   createdPoints: Record<string, unknown>[];
   deletedPointIds: number[];
+  updatedCircuit: Record<string, unknown> | null;
+  updatedPanel: Record<string, unknown> | null;
   updatedPoint: Record<string, unknown> | null;
   updatedRoom: Record<string, unknown> | null;
 }
@@ -87,9 +89,13 @@ async function mockApi(page: Page): Promise<ApiState> {
   const state: ApiState = {
     createdPoints: [],
     deletedPointIds: [],
+    updatedCircuit: null,
+    updatedPanel: null,
     updatedPoint: null,
     updatedRoom: null,
   };
+  let storedPanels = [{ ...panel }, { ...subpanel }];
+  let storedCircuits = [{ ...circuit }, { ...secondCircuit }, { ...subpanelCircuit }];
   let storedPoints = [{ ...point }];
   let nextPointId = 2;
 
@@ -103,11 +109,11 @@ async function mockApi(page: Page): Promise<ApiState> {
       return;
     }
     if (path === '/api/panels' && method === 'GET') {
-      await route.fulfill({ json: [panel, subpanel] });
+      await route.fulfill({ json: storedPanels });
       return;
     }
     if (path === '/api/circuits' && method === 'GET') {
-      await route.fulfill({ json: [circuit, secondCircuit, subpanelCircuit] });
+      await route.fulfill({ json: storedCircuits });
       return;
     }
     if (path === '/api/floorplan/main' && method === 'GET') {
@@ -143,6 +149,30 @@ async function mockApi(page: Page): Promise<ApiState> {
       state.deletedPointIds.push(pointId);
       storedPoints = storedPoints.filter((stored) => stored.id !== pointId);
       await route.fulfill({ status: 204 });
+      return;
+    }
+
+    const panelRoute = path.match(/^\/api\/panels\/(\d+)$/);
+    if (panelRoute && method === 'PATCH') {
+      const panelId = Number(panelRoute[1]);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.updatedPanel = body;
+      storedPanels = storedPanels.map((stored) =>
+        stored.id === panelId ? ({ ...stored, ...body } as typeof panel) : stored,
+      );
+      await route.fulfill({ json: storedPanels.find((stored) => stored.id === panelId) });
+      return;
+    }
+
+    const circuitRoute = path.match(/^\/api\/circuits\/(\d+)$/);
+    if (circuitRoute && method === 'PATCH') {
+      const circuitId = Number(circuitRoute[1]);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.updatedCircuit = body;
+      storedCircuits = storedCircuits.map((stored) =>
+        stored.id === circuitId ? ({ ...stored, ...body } as typeof circuit) : stored,
+      );
+      await route.fulfill({ json: storedCircuits.find((stored) => stored.id === circuitId) });
       return;
     }
     if (path === '/api/rooms/1' && method === 'PATCH') {
@@ -326,6 +356,77 @@ test('shows panel status and opens mapped breakers on the floorplan', async ({ p
   );
 });
 
+test('edits panels and breakers without saving cancelled drafts', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Panels & circuits' }).click();
+
+  const mainPanel = page.locator('.panel-card').filter({ hasText: 'Main panel' });
+  await mainPanel.getByRole('button', { name: 'Edit panel Main panel' }).click();
+  await mainPanel.getByRole('textbox', { name: 'Panel name' }).fill('Discarded panel name');
+  await mainPanel.getByRole('button', { name: 'Cancel panel edit' }).click();
+  expect(state.updatedPanel).toBeNull();
+
+  await mainPanel.getByRole('button', { name: 'Edit panel Main panel' }).click();
+  await expect(mainPanel.getByRole('textbox', { name: 'Panel name' })).toHaveValue('Main panel');
+  await mainPanel.getByRole('textbox', { name: 'Panel name' }).fill('Service panel');
+  await mainPanel.getByRole('spinbutton', { name: 'Panel amperage' }).fill('225');
+  await mainPanel.getByRole('button', { name: 'Save panel' }).click();
+  await expect.poll(() => state.updatedPanel).not.toBeNull();
+  expect(state.updatedPanel).toMatchObject({ name: 'Service panel', amperage: 225 });
+  await expect(page.getByRole('heading', { name: 'Service panel 225A' })).toBeVisible();
+
+  const mappedBreaker = page.locator('.breaker-slot[data-circuit-id="1"]');
+  await mappedBreaker.getByRole('button', { name: 'Edit breaker 1' }).click();
+  await mappedBreaker.getByRole('textbox', { name: 'Verified description' }).fill('Discarded circuit');
+  await mappedBreaker.getByRole('button', { name: 'Cancel breaker edit' }).click();
+  expect(state.updatedCircuit).toBeNull();
+
+  await mappedBreaker.getByRole('button', { name: 'Edit breaker 1' }).click();
+  await expect(mappedBreaker.getByRole('textbox', { name: 'Verified description' })).toHaveValue(
+    'Garage north and east walls',
+  );
+  await mappedBreaker.getByRole('textbox', { name: 'Breaker label' }).fill('3');
+  await mappedBreaker.getByRole('spinbutton', { name: 'Breaker amperage' }).fill('30');
+  await mappedBreaker.getByRole('combobox', { name: 'Breaker poles' }).selectOption('2');
+  await mappedBreaker
+    .getByRole('textbox', { name: 'Verified description' })
+    .fill('Garage workshop outlets');
+  await mappedBreaker.getByRole('button', { name: 'Save breaker' }).click();
+
+  await expect.poll(() => state.updatedCircuit).not.toBeNull();
+  expect(state.updatedCircuit).toMatchObject({
+    breaker_label: '3',
+    amperage: 30,
+    poles: 2,
+    verified_description: 'Garage workshop outlets',
+  });
+  await expect(page.getByRole('heading', { name: 'Garage workshop outlets' })).toBeVisible();
+});
+
+test('keeps add forms hidden until requested and names destructive controls', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Panels & circuits' }).click();
+
+  await expect(page.locator('form')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Delete panel Main panel' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete panel Workshop subpanel' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete breaker 1 from Main panel' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete breaker 2 from Main panel' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add panel' }).click();
+  await expect(page.getByRole('form', { name: 'Add panel' })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel adding panel' }).click();
+  await expect(page.locator('form')).toHaveCount(0);
+
+  const mainPanel = page.locator('.panel-card').filter({ hasText: 'Main panel' });
+  await mainPanel.getByRole('button', { name: 'Add circuit to Main panel' }).click();
+  const addCircuit = mainPanel.getByRole('form', { name: 'Add circuit to Main panel' });
+  await expect(addCircuit.getByRole('textbox', { name: 'Breaker label' })).toBeVisible();
+  await expect(addCircuit.getByRole('combobox', { name: 'Breaker poles' })).toBeVisible();
+});
+
 test('requires confirmation before deleting a point', async ({ page }) => {
   const state = await mockApi(page);
   await page.goto('/');
@@ -366,6 +467,8 @@ test('keeps panel controls contained at phone width', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Panels & circuits' }).click();
+
+  await expect(page.locator('form')).toHaveCount(0);
 
   const mainPanel = page.locator('.panel-card').first();
   const deletePanel = mainPanel.getByRole('button', { name: 'Delete panel' });

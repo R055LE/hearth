@@ -30,6 +30,32 @@ def test_subpanel_fed_from(client):
     assert sub_panel["fed_from_panel_id"] == main_panel["id"]
 
 
+def test_update_panel_rejects_self_as_upstream(client):
+    panel = _make_panel(client)
+
+    resp = client.patch(
+        f"/panels/{panel['id']}", json={"fed_from_panel_id": panel["id"]}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Panel feed relationship would create a cycle"
+
+
+def test_update_panel_rejects_descendant_as_upstream(client):
+    main_panel = _make_panel(client)
+    sub_panel = _make_panel(
+        client, name="Garage Subpanel", fed_from_panel_id=main_panel["id"]
+    )
+
+    resp = client.patch(
+        f"/panels/{main_panel['id']}",
+        json={"fed_from_panel_id": sub_panel["id"]},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Panel feed relationship would create a cycle"
+
+
 def test_list_panel_circuits(client):
     panel = _make_panel(client)
     other_panel = _make_panel(client, name="Subpanel")
