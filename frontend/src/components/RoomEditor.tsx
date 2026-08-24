@@ -5,6 +5,7 @@ import { RoomBuilder } from './RoomBuilder';
 
 export function RoomEditor() {
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [addingRoom, setAddingRoom] = useState(false);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +42,7 @@ export function RoomEditor() {
           <tr>
             <th>Name</th>
             <th>Floor</th>
-            <th />
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -50,7 +51,14 @@ export function RoomEditor() {
               <td>{room.name}</td>
               <td>{room.floor}</td>
               <td>
-                <button onClick={() => setEditingRoom(room)}>Edit</button>
+                <button
+                  onClick={() => {
+                    setAddingRoom(false);
+                    setEditingRoom(room);
+                  }}
+                >
+                  Edit
+                </button>
                 <button onClick={() => deleteRoom(room.id)}>Delete</button>
               </td>
             </tr>
@@ -58,17 +66,29 @@ export function RoomEditor() {
         </tbody>
       </table>
 
-      <h3>{editingRoom ? `Edit ${editingRoom.name}` : 'Add room'}</h3>
-      <RoomBuilder
-        key={editingRoom?.id ?? 'new'}
-        allRooms={rooms}
-        editingRoom={editingRoom}
-        onSaved={() => {
-          setEditingRoom(null);
-          refresh();
-        }}
-        onCancel={() => setEditingRoom(null)}
-      />
+      {editingRoom || addingRoom ? (
+        <>
+          <h3>{editingRoom ? `Edit ${editingRoom.name}` : 'Add room'}</h3>
+          <RoomBuilder
+            key={editingRoom?.id ?? 'new'}
+            allRooms={rooms}
+            editingRoom={editingRoom}
+            onSaved={() => {
+              setAddingRoom(false);
+              setEditingRoom(null);
+              refresh();
+            }}
+            onCancel={() => {
+              setAddingRoom(false);
+              setEditingRoom(null);
+            }}
+          />
+        </>
+      ) : (
+        <button type="button" onClick={() => setAddingRoom(true)}>
+          Add room
+        </button>
+      )}
     </div>
   );
 }
