@@ -69,6 +69,19 @@ passed; it does not prove those pieces still agree. Record decisions where the
 next change will find them, and keep the security posture and known findings
 current. Review is recurring maintenance, not a one-time certification.
 
+For UI changes, use this interaction definition of done:
+
+- Existing records stay discoverable and correctable.
+- Editing uses a draft. Cancel makes no API write, and Save is the commit point.
+- Creation forms stay contextual instead of dominating the idle screen.
+- Relationship changes are validated by the API. Destructive actions stay near
+  their target and require confirmation.
+- Changed journeys have stable browser regression coverage and work at 390 px
+  without horizontal overflow.
+- Exercise the changed journey against the packaged app and real API before
+  merge. Synthetic browser fixtures remain useful for deterministic CI, but do
+  not replace this check.
+
 One issue, one branch, one worktree under `.claude/worktrees/<slug>` (already
 gitignored), one PR. `main` is protected with `enforce_admins`, so the PR path
 is forced rather than encouraged. Reviews aren't required, this is solo work.
