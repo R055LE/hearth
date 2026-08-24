@@ -145,9 +145,13 @@
   justify-content: space-between;
   gap: 1rem;
   align-items: flex-start;
+  flex-wrap: wrap;
 }
 
-.panel-card-header > button {
+.panel-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   flex-shrink: 0;
 }
 
@@ -253,9 +257,57 @@
   padding: 0.75rem;
 }
 
-.circuit-form {
+.editor-form {
+  padding: 0.75rem;
+  border: 1px solid #777;
+  border-radius: 6px;
+  background: color-mix(in srgb, CanvasText 4%, Canvas);
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+}
+
+.field-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.field-grid input,
+.field-grid select {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.editor-form .form-actions {
+  margin-top: 0.75rem;
+}
+
+.breaker-edit-form {
+  grid-column: 2 / -1;
+  margin: 0.5rem;
+}
+
+.circuit-add {
   padding-top: 0.75rem;
+  margin-top: 0.75rem;
   border-top: 1px solid #999;
+}
+
+.panel-add {
+  margin-top: 1rem;
+}
+
+.panel-add h3 {
+  margin-bottom: 0.5rem;
+}
+
+.panel-card button,
+.panel-add button {
+  padding: 0.35rem 0.6rem;
 }
 
 .error {
@@ -369,5 +421,13 @@
     flex-direction: row;
     flex-wrap: wrap;
     border-top: 1px solid #777;
+  }
+
+  .breaker-edit-form {
+    grid-column: 1 / -1;
+  }
+
+  .field-grid {
+    grid-template-columns: 1fr;
   }
 }

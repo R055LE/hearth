@@ -8,6 +8,22 @@ from hearth.routers._database import commit_or_conflict
 router = APIRouter(prefix="/panels", tags=["panels"])
 
 
+def _feed_would_create_cycle(
+    db: Session, panel_id: int, fed_from_panel_id: int
+) -> bool:
+    current_id: int | None = fed_from_panel_id
+    visited: set[int] = set()
+    while current_id is not None:
+        if current_id == panel_id or current_id in visited:
+            return True
+        visited.add(current_id)
+        current = db.get(models.Panel, current_id)
+        if current is None:
+            return False
+        current_id = current.fed_from_panel_id
+    return False
+
+
 @router.get("", response_model=list[schemas.PanelRead])
 def list_panels(db: Session = Depends(get_db)):
     return db.query(models.Panel).all()
@@ -35,7 +51,16 @@ def update_panel(panel_id: int, panel: schemas.PanelUpdate, db: Session = Depend
     db_panel = db.get(models.Panel, panel_id)
     if db_panel is None:
         raise HTTPException(status_code=404, detail="Panel not found")
-    for field, value in panel.model_dump(exclude_unset=True).items():
+    updates = panel.model_dump(exclude_unset=True)
+    fed_from_panel_id = updates.get("fed_from_panel_id")
+    if fed_from_panel_id is not None and _feed_would_create_cycle(
+        db, panel_id, fed_from_panel_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Panel feed relationship would create a cycle",
+        )
+    for field, value in updates.items():
         setattr(db_panel, field, value)
     commit_or_conflict(db, "Panel references a missing room or upstream panel")
     db.refresh(db_panel)
