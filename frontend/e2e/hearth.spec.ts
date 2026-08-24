@@ -302,7 +302,17 @@ test('edits any existing room wall without rewinding later walls', async ({ page
   const state = await mockApi(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Rooms' }).click();
-  await page.getByRole('button', { name: 'Edit' }).click();
+
+  await expect(page.getByRole('group', { name: 'Placement' })).not.toBeVisible();
+  await expect(page.getByRole('group', { name: 'Walls' })).not.toBeVisible();
+  await expect(page.getByText(/This room has 1 circuit point/)).not.toBeVisible();
+
+  await page.getByRole('button', { name: 'Edit room geometry for Garage' }).click();
+  await expect(page.getByRole('group', { name: 'Placement' })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Walls' })).toBeVisible();
+  await expect(page.getByText(/This room has 1 circuit point/)).toBeVisible();
+  await expect(page.locator('.room-builder .floorplan-svg')).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'New wall turn' })).toBeVisible();
 
   await page.getByRole('spinbutton', { name: 'Wall 1 feet' }).fill('12');
   await page.getByRole('spinbutton', { name: 'Wall 3 feet' }).fill('12');
@@ -317,6 +327,40 @@ test('edits any existing room wall without rewinding later walls', async ({ page
       { length_in: 120, turn: 'right' },
     ],
   });
+});
+
+test('edits room metadata without opening geometry or changing mapped points', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Rooms' }).click();
+
+  const editDetails = page.getByRole('button', { name: 'Edit room details for Garage' });
+  await editDetails.click();
+
+  const detailsForm = page.getByRole('form', { name: 'Edit room details for Garage' });
+  await expect(detailsForm.getByRole('textbox', { name: 'Room name' })).toHaveValue('Garage');
+  await expect(detailsForm.getByRole('textbox', { name: 'Room floor' })).toHaveValue('main');
+  await expect(page.getByRole('group', { name: 'Placement' })).not.toBeVisible();
+  await expect(page.getByRole('group', { name: 'Walls' })).not.toBeVisible();
+  await expect(page.locator('.room-builder .floorplan-svg')).not.toBeVisible();
+  await expect(page.getByText(/circuit point/)).not.toBeVisible();
+
+  await detailsForm.getByRole('textbox', { name: 'Room name' }).fill('Discarded name');
+  await detailsForm.getByRole('button', { name: 'Cancel' }).click();
+  expect(state.updatedRoom).toBeNull();
+
+  await editDetails.click();
+  const savedDetailsForm = page.getByRole('form', { name: 'Edit room details for Garage' });
+  await expect(savedDetailsForm.getByRole('textbox', { name: 'Room name' })).toHaveValue('Garage');
+  await savedDetailsForm.getByRole('textbox', { name: 'Room name' }).fill('Workshop');
+  await savedDetailsForm.getByRole('button', { name: 'Save details' }).click();
+
+  await expect.poll(() => state.updatedRoom).toEqual({ name: 'Workshop', floor: 'main' });
+  expect(state.updatedPoint).toBeNull();
+  await expect(page.getByRole('cell', { name: 'Workshop', exact: true })).toBeVisible();
+  await expect(page.locator('form')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
 test('makes the floorplan controls keyboard-operable and named', async ({ page }) => {
@@ -489,7 +533,7 @@ test('keeps room creation hidden until requested and collapses it after cancel o
   await page.getByRole('button', { name: 'Create room' }).click();
 
   await expect.poll(() => state.createdRooms).toHaveLength(1);
-  await expect(page.getByRole('cell', { name: 'Storage' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Storage', exact: true })).toBeVisible();
   await expect(page.locator('form')).toHaveCount(0);
   await expect(addRoom).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);

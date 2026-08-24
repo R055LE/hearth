@@ -490,7 +490,11 @@ export function RoomBuilder({
               value={draftInches}
               onChange={(e) => setDraftInches(e.target.value)}
             />
-            <select value={draftTurn} onChange={(e) => setDraftTurn(e.target.value as typeof draftTurn)}>
+            <select
+              aria-label="New wall turn"
+              value={draftTurn}
+              onChange={(e) => setDraftTurn(e.target.value as typeof draftTurn)}
+            >
               <option value="left">Turn left</option>
               <option value="right">Turn right</option>
               <option value="straight">Straight</option>
