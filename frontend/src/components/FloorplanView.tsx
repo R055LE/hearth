@@ -401,6 +401,49 @@ export function FloorplanView({
         </div>
 
         <div className={`floorplan-sidebar${mode === 'walk' ? ' walk-sidebar' : ''}`}>
+          {draftPoint ? (
+            <PointForm
+              point={draftPoint}
+              rooms={plan.rooms}
+              circuits={circuits}
+              panels={panels}
+              title={activeEdit ? 'Edit point' : mode === 'walk' ? 'Next point' : 'Add point'}
+              submitLabel={activeEdit ? 'Save point' : mode === 'walk' ? 'Add point' : 'Create'}
+              showCircuitAndKind={mode !== 'walk'}
+              moveMode={mode === 'move'}
+              saving={saving}
+              onPointChange={changeDraft}
+              onMove={() => setMode('move')}
+              onCancel={() => {
+                if (mode === 'walk') setDraftPoint(null);
+                else finishInteraction();
+              }}
+              onSubmit={saveDraft}
+            />
+          ) : selectedPoint && mode === 'idle' ? (
+            <div className="info-card">
+              <h3>{selectedPoint.kind}</h3>
+              {selectedPoint.label && <p>{selectedPoint.label}</p>}
+              <p>Room: {allRooms.find((r) => r.id === selectedPoint.room_id)?.name}</p>
+              <p>Circuit: {circuitLabel(selectedPoint.circuit_id)}</p>
+              {selectedCircuit?.verified_description && (
+                <p>Confirmed: {selectedCircuit.verified_description}</p>
+              )}
+              {selectedCircuit?.panel_sticker_text && (
+                <p>Panel says: {selectedCircuit.panel_sticker_text}</p>
+              )}
+              <div className="form-actions">
+                <button type="button" onClick={() => beginEdit(false)}>Edit point</button>
+                <button type="button" onClick={() => beginEdit(true)}>Move point</button>
+                <button type="button" onClick={deleteSelectedPoint}>Delete point</button>
+              </div>
+            </div>
+          ) : mode === 'add' ? (
+            <p>Click the floorplan to choose a location for the new point.</p>
+          ) : mode !== 'walk' ? (
+            <p>Click a point on the floorplan, or a circuit below, to see details.</p>
+          ) : null}
+
           {mode === 'walk' && (
             <div className="info-card walk-controls">
               <h3>Circuit walk</h3>
@@ -446,47 +489,6 @@ export function FloorplanView({
               </div>
             </div>
           )}
-
-          {draftPoint ? (
-            <PointForm
-              point={draftPoint}
-              rooms={plan.rooms}
-              circuits={circuits}
-              panels={panels}
-              title={activeEdit ? 'Edit point' : mode === 'walk' ? 'Next point' : 'Add point'}
-              submitLabel={activeEdit ? 'Save point' : mode === 'walk' ? 'Add point' : 'Create'}
-              showCircuitAndKind={mode !== 'walk'}
-              moveMode={mode === 'move'}
-              saving={saving}
-              onPointChange={changeDraft}
-              onMove={() => setMode('move')}
-              onCancel={() => {
-                if (mode === 'walk') setDraftPoint(null);
-                else finishInteraction();
-              }}
-              onSubmit={saveDraft}
-            />
-          ) : selectedPoint && mode === 'idle' ? (
-            <div className="info-card">
-              <h3>{selectedPoint.kind}</h3>
-              {selectedPoint.label && <p>{selectedPoint.label}</p>}
-              <p>Room: {allRooms.find((r) => r.id === selectedPoint.room_id)?.name}</p>
-              <p>Circuit: {circuitLabel(selectedPoint.circuit_id)}</p>
-              {selectedCircuit?.verified_description && (
-                <p>Confirmed: {selectedCircuit.verified_description}</p>
-              )}
-              {selectedCircuit?.panel_sticker_text && (
-                <p>Panel says: {selectedCircuit.panel_sticker_text}</p>
-              )}
-              <div className="form-actions">
-                <button type="button" onClick={() => beginEdit(false)}>Edit point</button>
-                <button type="button" onClick={() => beginEdit(true)}>Move point</button>
-                <button type="button" onClick={deleteSelectedPoint}>Delete point</button>
-              </div>
-            </div>
-          ) : mode !== 'walk' ? (
-            <p>Click a point on the floorplan, or a circuit below, to see details.</p>
-          ) : null}
 
           {mode !== 'walk' && (
             <>

@@ -319,6 +319,15 @@
   gap: 1.5rem;
 }
 
+.room-builder-preview {
+  flex: 1;
+  min-width: 0;
+}
+
+.room-builder-actions {
+  margin-top: 0.75rem;
+}
+
 .heading-buttons {
   display: flex;
   gap: 0.25rem;

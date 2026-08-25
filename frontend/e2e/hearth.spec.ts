@@ -236,6 +236,20 @@ test('saves the location shown by the latest point preview', async ({ page }) =>
   });
 });
 
+test('explains how to choose a location while adding a point', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'Add point' }).click();
+
+  await expect(
+    page.getByText('Click the floorplan to choose a location for the new point.'),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Click a point on the floorplan, or a circuit below, to see details.'),
+  ).not.toBeVisible();
+});
+
 test('edits point details and moves the preview before saving', async ({ page }) => {
   const state = await mockApi(page);
   await page.goto('/');
@@ -327,6 +341,23 @@ test('edits any existing room wall without rewinding later walls', async ({ page
       { length_in: 120, turn: 'right' },
     ],
   });
+});
+
+test('puts room geometry save actions after the mobile preview', async ({ page }) => {
+  await mockApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Rooms' }).click();
+  await page.getByRole('button', { name: 'Edit room geometry for Garage' }).click();
+
+  const preview = page.locator('.room-builder .floorplan-svg');
+  const saveRoom = page.getByRole('button', { name: 'Save room' });
+  const previewBox = await preview.boundingBox();
+  const saveBox = await saveRoom.boundingBox();
+
+  expect(previewBox).not.toBeNull();
+  expect(saveBox).not.toBeNull();
+  expect(saveBox?.y).toBeGreaterThan((previewBox?.y ?? 0) + (previewBox?.height ?? 0));
 });
 
 test('edits room metadata without opening geometry or changing mapped points', async ({ page }) => {
@@ -572,6 +603,11 @@ test('keeps circuit-walk controls reachable over the phone floorplan', async ({ 
   expect(walkBox?.x).toBeGreaterThanOrEqual(0);
   expect((walkBox?.x ?? 0) + (walkBox?.width ?? 0)).toBeLessThanOrEqual(390);
   await expect(page.getByRole('button', { name: 'Finish walk' })).toBeVisible();
+
+  await clickFloorplan(page, 0.48, 0.4);
+  const addPoint = page.locator('.point-form').getByRole('button', { name: 'Add point' });
+  await expect(addPoint).toBeInViewport();
+  expect(await walkSidebar.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
 test('keeps panel controls contained at phone width', async ({ page }) => {

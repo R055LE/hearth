@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { api } from '../api';
 import { closureGapFt, wallsToPolygon, wallsToVertices } from '../wallWalk';
 import type { StartPoint, Turn, Wall } from '../wallWalk';
@@ -100,6 +100,7 @@ export function RoomBuilder({
   onSaved: () => void;
   onCancel?: () => void;
 }) {
+  const formId = useId();
   const initial = initialFormState(editingRoom, allRooms);
   const [name, setName] = useState(initial.name);
   const [floor, setFloor] = useState(initial.floor);
@@ -304,7 +305,7 @@ export function RoomBuilder({
 
   return (
     <div className="room-builder">
-      <form className="stacked-form" onSubmit={submit}>
+      <form id={formId} className="stacked-form" onSubmit={submit}>
         <label>
           Name: <input value={name} onChange={(e) => setName(e.target.value)} required />
         </label>
@@ -528,8 +529,27 @@ export function RoomBuilder({
           <p className="error">Original anchor room was deleted — placement reset to its last known position.</p>
         )}
         {error && <p className="error">{error}</p>}
-        <div className="form-actions">
-          <button type="submit" disabled={!closed || (placementMode === 'anchor' && !anchorValid)}>
+      </form>
+
+      <div className="room-builder-preview">
+        <svg viewBox={`${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`} className="floorplan-svg">
+          {roomsOnFloor.map((room) => (
+            <polygon
+              key={room.id}
+              points={room.polygon.map(([x, y]) => `${x},${y}`).join(' ')}
+              className={room.id === anchorRoomId ? 'room-polygon anchor-room' : 'room-polygon'}
+            />
+          ))}
+          {vertices.length > 1 && (
+            <polyline points={vertices.map((v) => `${v.x},${v.y}`).join(' ')} className="draft-room-outline" />
+          )}
+        </svg>
+        <div className="form-actions room-builder-actions">
+          <button
+            type="submit"
+            form={formId}
+            disabled={!closed || (placementMode === 'anchor' && !anchorValid)}
+          >
             {editingRoom ? 'Save room' : 'Create room'}
           </button>
           {onCancel && (
@@ -538,20 +558,7 @@ export function RoomBuilder({
             </button>
           )}
         </div>
-      </form>
-
-      <svg viewBox={`${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`} className="floorplan-svg">
-        {roomsOnFloor.map((room) => (
-          <polygon
-            key={room.id}
-            points={room.polygon.map(([x, y]) => `${x},${y}`).join(' ')}
-            className={room.id === anchorRoomId ? 'room-polygon anchor-room' : 'room-polygon'}
-          />
-        ))}
-        {vertices.length > 1 && (
-          <polyline points={vertices.map((v) => `${v.x},${v.y}`).join(' ')} className="draft-room-outline" />
-        )}
-      </svg>
+      </div>
     </div>
   );
 }
