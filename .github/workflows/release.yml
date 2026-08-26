@@ -80,6 +80,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0 # v0.70.0 misclassifies Debian's postponed OpenSSL fix as available
+          cache: false # release decisions need current advisory data, including same-day corrections
           image-ref: ${{ steps.img.outputs.ref }}
           severity: CRITICAL,HIGH
           exit-code: "0"
@@ -92,6 +93,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0 # keep report and gate on the same vulnerability model
+          cache: false # reuse the first scan's fresh workspace DB, not the Actions cache
           image-ref: ${{ steps.img.outputs.ref }}
           severity: CRITICAL,HIGH
           ignore-unfixed: true
