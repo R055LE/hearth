@@ -57,3 +57,21 @@ export interface Floorplan {
   rooms: Room[];
   circuit_points: CircuitPoint[];
 }
+
+export interface MaintenanceCompletion {
+  id: number;
+  task_id: number;
+  scheduled_for: string;
+  completed_on: string;
+}
+
+export interface MaintenanceTask {
+  id: number;
+  title: string;
+  room_id: number | null;
+  due_date: string;
+  recurrence_days: number | null;
+  notes: string | null;
+  is_active: boolean;
+  completions: MaintenanceCompletion[];
+}

@@ -1,17 +1,17 @@
 # Architecture
 
-How hearth is put together and why, as of Phase 1 (floorplan + electrical circuits).
+How hearth is put together and why, through the first maintenance scheduling slice.
 This is a design reference, not a spec — the code is the source of truth where they
 disagree.
 
 ## Overview
 
-Self-hosted home information tracker. Phase 1 covers rooms, electrical panels and
-circuits, and an interactive floorplan that links the two: click an outlet/fixture
-on the floorplan and see which breaker it's on, or click a breaker and see every
-point it feeds highlighted on the floorplan. Maintenance scheduling and vendor/quote
-records are later phases (see "Deferred" below) — not built yet, but the schema
-doesn't need reworking to add them.
+Self-hosted home information tracker. The first phase covers rooms, electrical
+panels and circuits, and an interactive floorplan that links the two: click an
+outlet/fixture on the floorplan and see which breaker it's on, or click a breaker
+and see every point it feeds highlighted on the floorplan. The first Phase 2
+slice adds one-time and interval-based maintenance with completion history.
+Vendor and quote records remain deferred.
 
 Stack: FastAPI + SQLAlchemy + SQLite on the backend, React + Vite + TypeScript SPA
 on the frontend, single Docker image, no auth (tailnet/home-network access only for
@@ -20,13 +20,21 @@ now). This mirrors the only other long-running self-hosted app in this workspace
 
 ## Data model and the coordinate space
 
-`rooms`, `panels`, `circuits`, and `circuit_points` are the four tables (see
-`backend/hearth/models.py`). The one non-obvious piece: every room's `polygon` and
+`rooms`, `panels`, `circuits`, `circuit_points`, `maintenance_tasks`, and
+`maintenance_completions` are the six tables (see `backend/hearth/models.py`).
+The one non-obvious floorplan piece: every room's `polygon` and
 every `circuit_point`'s `x`/`y` live in the **same coordinate space per floor** —
 there's no per-room-relative positioning. That's what lets the frontend render an
 entire floor (all its rooms and all their points) in one `<svg>` with a single
 `viewBox`, and it's why `GET /api/floorplan/{floor}` exists as a combined endpoint:
 one call gets everything needed to draw a floor, instead of N+1 requests per room.
+
+A maintenance completion snapshots both the scheduled date and the completion
+date before a recurring task advances. Recurrence is intentionally an interval
+in days for now. The next due date is the completion date plus that interval,
+which prevents an overdue task from remaining immediately overdue after it is
+finished. One-time tasks close after their first completion. Completion records
+have no mutation endpoint.
 
 `circuits.panel_sticker_text` and `circuits.verified_description` are deliberately
 separate fields — the panel label is kept even when it's known to be wrong, next to
@@ -96,7 +104,6 @@ new schema is not assumed to be backward-compatible with the previous image.
 
 ## Deferred (Phase 2+)
 
-- Maintenance scheduling (recurring tasks + history log).
 - Vendors/quotes/documents (installer records, cost, warranty, attachments).
 - Auth (single-user login or tighter tailnet-exposure hardening) — flagged by Ross
   as something to revisit, so nothing here hardcodes a single-implicit-user

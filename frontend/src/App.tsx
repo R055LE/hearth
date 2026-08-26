@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { FloorplanView } from './components/FloorplanView';
+import { MaintenanceView } from './components/MaintenanceView';
 import { RoomEditor } from './components/RoomEditor';
 import { PanelEditor } from './components/PanelEditor';
 import './App.css';
 
-type Tab = 'floorplan' | 'rooms' | 'panels';
+type Tab = 'floorplan' | 'rooms' | 'panels' | 'maintenance';
 
 function App() {
   const [tab, setTab] = useState<Tab>('floorplan');
@@ -32,6 +33,12 @@ function App() {
           <button className={tab === 'panels' ? 'active' : ''} onClick={() => setTab('panels')}>
             Panels &amp; circuits
           </button>
+          <button
+            className={tab === 'maintenance' ? 'active' : ''}
+            onClick={() => setTab('maintenance')}
+          >
+            Maintenance
+          </button>
         </nav>
       </header>
       <main>
@@ -44,6 +51,7 @@ function App() {
         )}
         {tab === 'rooms' && <RoomEditor />}
         {tab === 'panels' && <PanelEditor onViewCircuit={openFloorplan} />}
+        {tab === 'maintenance' && <MaintenanceView />}
       </main>
     </div>
   );

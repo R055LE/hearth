@@ -76,7 +76,59 @@ const point = {
   label: 'North wall outlet',
 };
 
+interface MaintenanceCompletionFixture {
+  id: number;
+  task_id: number;
+  scheduled_for: string;
+  completed_on: string;
+}
+
+interface MaintenanceTaskFixture {
+  id: number;
+  title: string;
+  room_id: number | null;
+  due_date: string;
+  recurrence_days: number | null;
+  notes: string | null;
+  is_active: boolean;
+  completions: MaintenanceCompletionFixture[];
+}
+
+function localDate(daysFromToday = 0): string {
+  const value = new Date();
+  value.setDate(value.getDate() + daysFromToday);
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(value: string, days: number): string {
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function maintenanceTask(
+  overrides: Partial<MaintenanceTaskFixture> = {},
+): MaintenanceTaskFixture {
+  return {
+    id: 1,
+    title: 'Replace furnace filter',
+    room_id: 1,
+    due_date: localDate(-5),
+    recurrence_days: 30,
+    notes: 'Use the 16x25x1 filters.',
+    is_active: true,
+    completions: [],
+    ...overrides,
+  };
+}
+
 interface ApiState {
+  completedMaintenanceTask: Record<string, unknown> | null;
+  createdMaintenanceTasks: Record<string, unknown>[];
   createdRooms: Record<string, unknown>[];
   createdPoints: Record<string, unknown>[];
   deletedPointIds: number[];
@@ -84,13 +136,19 @@ interface ApiState {
   updatedPanel: Record<string, unknown> | null;
   updatedPoint: Record<string, unknown> | null;
   updatedRoom: Record<string, unknown> | null;
+  updatedMaintenanceTask: Record<string, unknown> | null;
 }
 
 async function mockApi(
   page: Page,
-  options: { rooms?: (typeof room)[] } = {},
+  options: {
+    maintenanceTasks?: MaintenanceTaskFixture[];
+    rooms?: (typeof room)[];
+  } = {},
 ): Promise<ApiState> {
   const state: ApiState = {
+    completedMaintenanceTask: null,
+    createdMaintenanceTasks: [],
     createdRooms: [],
     createdPoints: [],
     deletedPointIds: [],
@@ -98,18 +156,85 @@ async function mockApi(
     updatedPanel: null,
     updatedPoint: null,
     updatedRoom: null,
+    updatedMaintenanceTask: null,
   };
+  let storedMaintenanceTasks = (options.maintenanceTasks ?? []).map((task) => ({
+    ...task,
+    completions: task.completions.map((completion) => ({ ...completion })),
+  }));
   let storedRooms = (options.rooms ?? [room]).map((storedRoom) => ({ ...storedRoom }));
   let storedPanels = [{ ...panel }, { ...subpanel }];
   let storedCircuits = [{ ...circuit }, { ...secondCircuit }, { ...subpanelCircuit }];
   let storedPoints = [{ ...point }];
   let nextRoomId = 2;
   let nextPointId = 2;
+  let nextMaintenanceTaskId = Math.max(0, ...storedMaintenanceTasks.map((task) => task.id)) + 1;
+  let nextCompletionId = 1;
 
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     const method = request.method();
+
+    if (path === '/api/maintenance-tasks' && method === 'GET') {
+      await route.fulfill({ json: storedMaintenanceTasks });
+      return;
+    }
+    if (path === '/api/maintenance-tasks' && method === 'POST') {
+      const body = request.postDataJSON() as Omit<
+        MaintenanceTaskFixture,
+        'id' | 'is_active' | 'completions'
+      >;
+      const created: MaintenanceTaskFixture = {
+        id: nextMaintenanceTaskId++,
+        ...body,
+        is_active: true,
+        completions: [],
+      };
+      state.createdMaintenanceTasks.push(body);
+      storedMaintenanceTasks.push(created);
+      await route.fulfill({ status: 201, json: created });
+      return;
+    }
+
+    const maintenanceCompletionRoute = path.match(
+      /^\/api\/maintenance-tasks\/(\d+)\/completions$/,
+    );
+    if (maintenanceCompletionRoute && method === 'POST') {
+      const taskId = Number(maintenanceCompletionRoute[1]);
+      const body = request.postDataJSON() as { completed_on: string };
+      const task = storedMaintenanceTasks.find((candidate) => candidate.id === taskId);
+      if (!task) {
+        await route.fulfill({ status: 404, json: { detail: 'Maintenance task not found' } });
+        return;
+      }
+      const completion = {
+        id: nextCompletionId++,
+        task_id: taskId,
+        scheduled_for: task.due_date,
+        completed_on: body.completed_on,
+      };
+      task.completions.unshift(completion);
+      if (task.recurrence_days == null) task.is_active = false;
+      else task.due_date = addDays(body.completed_on, task.recurrence_days);
+      state.completedMaintenanceTask = body;
+      await route.fulfill({ status: 201, json: task });
+      return;
+    }
+
+    const maintenanceTaskRoute = path.match(/^\/api\/maintenance-tasks\/(\d+)$/);
+    if (maintenanceTaskRoute && method === 'PATCH') {
+      const taskId = Number(maintenanceTaskRoute[1]);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.updatedMaintenanceTask = body;
+      storedMaintenanceTasks = storedMaintenanceTasks.map((task) =>
+        task.id === taskId ? ({ ...task, ...body } as MaintenanceTaskFixture) : task,
+      );
+      await route.fulfill({
+        json: storedMaintenanceTasks.find((task) => task.id === taskId),
+      });
+      return;
+    }
 
     if (path === '/api/rooms' && method === 'GET') {
       await route.fulfill({ json: storedRooms });
@@ -211,6 +336,125 @@ async function clickFloorplan(page: Page, xRatio: number, yRatio: number) {
   if (!box) throw new Error('Floorplan is not visible');
   await floorplan.click({ position: { x: box.width * xRatio, y: box.height * yRatio } });
 }
+
+test('groups maintenance work and keeps creation contextual on mobile', async ({ page }) => {
+  const state = await mockApi(page, {
+    maintenanceTasks: [
+      maintenanceTask(),
+      maintenanceTask({ id: 2, title: 'Test smoke alarms', due_date: localDate() }),
+      maintenanceTask({ id: 3, title: 'Clean gutters', due_date: localDate(20) }),
+      maintenanceTask({
+        id: 4,
+        title: 'Seal driveway',
+        due_date: localDate(-30),
+        recurrence_days: null,
+        is_active: false,
+        completions: [
+          {
+            id: 1,
+            task_id: 4,
+            scheduled_for: localDate(-30),
+            completed_on: localDate(-2),
+          },
+        ],
+      }),
+    ],
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Maintenance' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Overdue' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Due today' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Upcoming' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Completed' })).toBeVisible();
+  const completed = page.getByRole('article', { name: 'Seal driveway' });
+  await expect(completed.getByRole('button', { name: 'Edit Seal driveway' })).toBeVisible();
+  await expect(page.locator('form')).toHaveCount(0);
+
+  const addTask = page.getByRole('button', { name: 'Add task' });
+  await addTask.click();
+  const form = page.getByRole('form', { name: 'Add maintenance task' });
+  await form.getByRole('textbox', { name: 'Task' }).fill('Flush water heater');
+  await form.getByRole('combobox', { name: 'Room' }).selectOption('1');
+  await form.getByLabel('Due date').fill(localDate(14));
+  await form.getByRole('combobox', { name: 'Schedule' }).selectOption('repeat');
+  await form.getByRole('spinbutton', { name: 'Interval days' }).fill('180');
+  await form.getByRole('textbox', { name: 'Notes' }).fill('Drain until the water runs clear.');
+  await form.getByRole('button', { name: 'Cancel adding task' }).click();
+  expect(state.createdMaintenanceTasks).toEqual([]);
+  await expect(page.locator('form')).toHaveCount(0);
+
+  await addTask.click();
+  const savedForm = page.getByRole('form', { name: 'Add maintenance task' });
+  await savedForm.getByRole('textbox', { name: 'Task' }).fill('Flush water heater');
+  await savedForm.getByLabel('Due date').fill(localDate(14));
+  await savedForm.getByRole('button', { name: 'Create task' }).click();
+
+  await expect.poll(() => state.createdMaintenanceTasks).toHaveLength(1);
+  await expect(page.getByRole('heading', { name: 'Flush water heater' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('edits maintenance tasks through a discardable draft', async ({ page }) => {
+  const state = await mockApi(page, {
+    maintenanceTasks: [maintenanceTask({ due_date: localDate(10) })],
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Maintenance' }).click();
+
+  const task = page.getByRole('article', { name: 'Replace furnace filter' });
+  await task.getByRole('button', { name: 'Edit Replace furnace filter' }).click();
+  const form = page.getByRole('form', { name: 'Edit Replace furnace filter' });
+  await form.getByRole('textbox', { name: 'Task' }).fill('Discarded title');
+  await form.getByRole('button', { name: 'Cancel task edit' }).click();
+  expect(state.updatedMaintenanceTask).toBeNull();
+
+  await task.getByRole('button', { name: 'Edit Replace furnace filter' }).click();
+  const savedForm = page.getByRole('form', { name: 'Edit Replace furnace filter' });
+  await expect(savedForm.getByRole('textbox', { name: 'Task' })).toHaveValue(
+    'Replace furnace filter',
+  );
+  await savedForm.getByRole('textbox', { name: 'Task' }).fill('Replace HVAC filter');
+  await savedForm.getByRole('combobox', { name: 'Schedule' }).selectOption('once');
+  await savedForm.getByRole('button', { name: 'Save task' }).click();
+
+  await expect.poll(() => state.updatedMaintenanceTask).not.toBeNull();
+  expect(state.updatedMaintenanceTask).toMatchObject({
+    title: 'Replace HVAC filter',
+    recurrence_days: null,
+  });
+  await expect(page.getByRole('heading', { name: 'Replace HVAC filter' })).toBeVisible();
+});
+
+test('completes maintenance through a dated draft and preserves history', async ({ page }) => {
+  const state = await mockApi(page, { maintenanceTasks: [maintenanceTask()] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Maintenance' }).click();
+
+  const task = page.getByRole('article', { name: 'Replace furnace filter' });
+  await task.getByRole('button', { name: 'Complete Replace furnace filter' }).click();
+  const form = page.getByRole('form', { name: 'Complete Replace furnace filter' });
+  await expect(form.getByLabel('Completion date')).toHaveValue(localDate());
+  await form.getByRole('button', { name: 'Cancel completion' }).click();
+  expect(state.completedMaintenanceTask).toBeNull();
+
+  await task.getByRole('button', { name: 'Complete Replace furnace filter' }).click();
+  await page
+    .getByRole('form', { name: 'Complete Replace furnace filter' })
+    .getByRole('button', { name: 'Save completion' })
+    .click();
+
+  await expect.poll(() => state.completedMaintenanceTask).toEqual({
+    completed_on: localDate(),
+  });
+  await expect(page.getByRole('heading', { name: 'Replace furnace filter' })).toBeVisible();
+  await expect(page.getByText(`Next due ${addDays(localDate(), 30)}`)).toBeVisible();
+  await page.getByText('History (1)').click();
+  await expect(page.getByText(`Completed ${localDate()} for ${localDate(-5)}`)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
 
 test('saves the location shown by the latest point preview', async ({ page }) => {
   const state = await mockApi(page);

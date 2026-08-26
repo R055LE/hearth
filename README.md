@@ -1,10 +1,11 @@
 # hearth
 
-Self-hosted home information tracker. Phase 1: rooms, electrical panels/circuits,
-and an interactive floorplan where clicking an outlet/fixture shows its breaker
-(and clicking a breaker highlights its points on the floorplan). Maintenance
-scheduling and vendor/quote tracking are planned for later phases — the schema
-is shaped to add them without a rework.
+Self-hosted home information tracker for rooms, electrical panels/circuits,
+an interactive floorplan, and recurring or one-time maintenance. Clicking an
+outlet/fixture shows its breaker, clicking a breaker highlights its points on
+the floorplan, and completing recurring maintenance advances its next due date
+without losing the completed occurrence. Vendor/quote tracking is planned for
+a later phase.
 
 ## Screenshots
 

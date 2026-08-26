@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from hearth.routers import circuit_points, circuits, floorplan, panels, rooms
+from hearth.routers import circuit_points, circuits, floorplan, maintenance, panels, rooms
 
 # Schema is managed by Alembic (`alembic upgrade head`), not created here —
 # run migrations before starting the app.
@@ -16,6 +16,7 @@ api.include_router(panels.router)
 api.include_router(circuits.router)
 api.include_router(circuit_points.router)
 api.include_router(floorplan.router)
+api.include_router(maintenance.router)
 app.mount("/api", api)
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "static"
