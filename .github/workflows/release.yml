@@ -79,6 +79,7 @@ jobs:
       - name: Report all findings (does not block)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.74.0 # v0.70.0 misclassifies Debian's postponed OpenSSL fix as available
           image-ref: ${{ steps.img.outputs.ref }}
           severity: CRITICAL,HIGH
           exit-code: "0"
@@ -90,6 +91,7 @@ jobs:
       - name: Gate on fixable findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.74.0 # keep report and gate on the same vulnerability model
           image-ref: ${{ steps.img.outputs.ref }}
           severity: CRITICAL,HIGH
           ignore-unfixed: true
