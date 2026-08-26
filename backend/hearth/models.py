@@ -1,4 +1,6 @@
-from sqlalchemy import JSON, ForeignKey
+from datetime import date
+
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from hearth.database import Base
@@ -18,6 +20,9 @@ class Room(Base):
 
     panels: Mapped[list["Panel"]] = relationship(back_populates="room")
     circuit_points: Mapped[list["CircuitPoint"]] = relationship(back_populates="room")
+    maintenance_tasks: Mapped[list["MaintenanceTask"]] = relationship(
+        back_populates="room", passive_deletes=True
+    )
 
 
 class Panel(Base):
@@ -71,3 +76,43 @@ class CircuitPoint(Base):
 
     circuit: Mapped[Circuit] = relationship(back_populates="circuit_points")
     room: Mapped[Room] = relationship(back_populates="circuit_points")
+
+
+class MaintenanceTask(Base):
+    __tablename__ = "maintenance_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "recurrence_days IS NULL OR recurrence_days > 0",
+            name="ck_maintenance_tasks_recurrence_days_positive",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(nullable=False)
+    room_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rooms.id", ondelete="SET NULL"), nullable=True
+    )
+    due_date: Mapped[date] = mapped_column(nullable=False)
+    recurrence_days: Mapped[int | None] = mapped_column(nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="1")
+
+    room: Mapped[Room | None] = relationship(back_populates="maintenance_tasks")
+    completions: Mapped[list["MaintenanceCompletion"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="MaintenanceCompletion.completed_on.desc()",
+    )
+
+
+class MaintenanceCompletion(Base):
+    __tablename__ = "maintenance_completions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("maintenance_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    scheduled_for: Mapped[date] = mapped_column(nullable=False)
+    completed_on: Mapped[date] = mapped_column(nullable=False)
+
+    task: Mapped[MaintenanceTask] = relationship(back_populates="completions")

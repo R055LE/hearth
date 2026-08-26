@@ -10,6 +10,7 @@
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-bottom: 1rem;
 }
@@ -368,6 +369,88 @@
   fill: none;
   stroke: #f97316;
   stroke-width: 0.4;
+}
+
+.maintenance-group {
+  margin-bottom: 1.5rem;
+}
+
+.maintenance-group h3 {
+  margin-bottom: 0.5rem;
+}
+
+.maintenance-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+  gap: 0.75rem;
+}
+
+.maintenance-card {
+  padding: 0.75rem;
+  border: 1px solid #777;
+  border-radius: 8px;
+}
+
+.maintenance-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.maintenance-card-header h4 {
+  margin: 0;
+}
+
+.maintenance-overdue {
+  color: #b91c1c;
+}
+
+.maintenance-due-today,
+.maintenance-upcoming {
+  color: #b45309;
+}
+
+.maintenance-completed {
+  color: #047857;
+}
+
+.maintenance-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.maintenance-form {
+  max-width: 42rem;
+}
+
+.maintenance-form textarea,
+.completion-form input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.completion-form {
+  margin-top: 0.75rem;
+}
+
+.completion-form label {
+  display: block;
+}
+
+.maintenance-history {
+  margin-top: 0.75rem;
+}
+
+.maintenance-history ul {
+  margin-bottom: 0;
+  padding-left: 1.25rem;
+}
+
+.maintenance-add {
+  margin-top: 1rem;
 }
 
 @media (max-width: 700px) {

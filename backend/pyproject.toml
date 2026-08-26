@@ -1,7 +1,7 @@
 [project]
 name = "hearth"
 version = "0.1.0"
-description = "Self-hosted home information tracker: floorplans, electrical circuits, and (later) maintenance and vendor records."
+description = "Self-hosted home information tracker: floorplans, electrical circuits, and maintenance."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }

@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -155,6 +156,48 @@ class CircuitPointRead(CircuitPointBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+
+
+class MaintenanceCompletionCreate(BaseModel):
+    completed_on: date
+
+
+class MaintenanceCompletionRead(MaintenanceCompletionCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    task_id: int
+    scheduled_for: date
+
+
+class MaintenanceTaskBase(BaseModel):
+    title: str = Field(min_length=1)
+    room_id: int | None = None
+    due_date: date
+    recurrence_days: int | None = Field(default=None, gt=0)
+    notes: str | None = None
+
+
+class MaintenanceTaskCreate(MaintenanceTaskBase):
+    pass
+
+
+class MaintenanceTaskUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+    room_id: int | None = None
+    due_date: date | None = None
+    recurrence_days: int | None = Field(default=None, gt=0)
+    notes: str | None = None
+
+    _required_fields = field_validator("title", "due_date")(_required)
+
+
+class MaintenanceTaskRead(MaintenanceTaskBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    is_active: bool
+    completions: list[MaintenanceCompletionRead]
 
 
 class FloorplanResponse(BaseModel):

@@ -1,4 +1,4 @@
-import type { Circuit, CircuitPoint, Floorplan, Panel, Room } from './types';
+import type { Circuit, CircuitPoint, Floorplan, MaintenanceTask, Panel, Room } from './types';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
@@ -26,6 +26,19 @@ const patch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 
 export const api = {
+  maintenanceTasks: {
+    list: () => request<MaintenanceTask[]>('/maintenance-tasks'),
+    create: (task: Omit<MaintenanceTask, 'id' | 'is_active' | 'completions'>) =>
+      post<MaintenanceTask>('/maintenance-tasks', task),
+    update: (
+      id: number,
+      task: Partial<Omit<MaintenanceTask, 'id' | 'is_active' | 'completions'>>,
+    ) => patch<MaintenanceTask>(`/maintenance-tasks/${id}`, task),
+    complete: (id: number, completedOn: string) =>
+      post<MaintenanceTask>(`/maintenance-tasks/${id}/completions`, {
+        completed_on: completedOn,
+      }),
+  },
   rooms: {
     list: () => request<Room[]>('/rooms'),
     create: (room: Omit<Room, 'id'>) => post<Room>('/rooms', room),
