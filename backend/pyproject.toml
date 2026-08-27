@@ -10,7 +10,7 @@ dependencies = [
     "fastapi>=0.141.1,<1.0",
     "uvicorn[standard]>=0.52.4,<1.0",
     "sqlalchemy>=2.0.51,<3.0",
-    "alembic>=1.19.0,<2.0",
+    "alembic>=1.19.1,<2.0",
     "pydantic>=2.13.4,<3.0",
     "defusedxml>=0.7.1,<1.0",
 ]
