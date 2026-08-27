@@ -55,8 +55,8 @@
 }
 
 .room-label {
-  font-size: 3px;
   fill: #333;
+  pointer-events: none;
 }
 
 .point-marker:focus {

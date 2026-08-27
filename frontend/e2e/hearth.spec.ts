@@ -257,7 +257,12 @@ async function mockApi(
       return;
     }
     if (path === '/api/floorplan/main' && method === 'GET') {
-      await route.fulfill({ json: { rooms: [room], circuit_points: storedPoints } });
+      await route.fulfill({
+        json: {
+          rooms: storedRooms.filter((storedRoom) => storedRoom.floor === 'main'),
+          circuit_points: storedPoints,
+        },
+      });
       return;
     }
     if (path === '/api/circuit-points' && method === 'GET') {
@@ -636,6 +641,44 @@ test('edits room metadata without opening geometry or changing mapped points', a
   await expect(page.getByRole('cell', { name: 'Workshop', exact: true })).toBeVisible();
   await expect(page.locator('form')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('keeps long room labels inside room geometry at desktop and phone width', async ({ page }) => {
+  const longRoom = {
+    ...room,
+    name: 'Mechanical and Utility Equipment Storage Room',
+    polygon: [
+      [10, 0],
+      [16, 0],
+      [16, 6],
+      [10, 6],
+    ],
+  };
+  await mockApi(page, { rooms: [longRoom] });
+
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+
+    const roomBox = await page.locator('.room-polygon').boundingBox();
+    const label = page.locator('.room-label');
+    const labelBox = await label.boundingBox();
+    expect(roomBox).not.toBeNull();
+    expect(labelBox).not.toBeNull();
+    await expect(label).toHaveText(longRoom.name);
+    expect(await label.locator('tspan').count()).toBeGreaterThan(1);
+    expect(labelBox?.x).toBeGreaterThanOrEqual((roomBox?.x ?? 0) - 1);
+    expect(labelBox?.y).toBeGreaterThanOrEqual((roomBox?.y ?? 0) - 1);
+    expect((labelBox?.x ?? 0) + (labelBox?.width ?? 0)).toBeLessThanOrEqual(
+      (roomBox?.x ?? 0) + (roomBox?.width ?? 0) + 1,
+    );
+    expect((labelBox?.y ?? 0) + (labelBox?.height ?? 0)).toBeLessThanOrEqual(
+      (roomBox?.y ?? 0) + (roomBox?.height ?? 0) + 1,
+    );
+  }
 });
 
 test('makes the floorplan controls keyboard-operable and named', async ({ page }) => {
