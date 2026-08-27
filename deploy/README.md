@@ -65,12 +65,13 @@ ssh "$HOST" 'docker logs --tail 20 "$(docker ps -q --filter name=hearth)"'
 > default. Make it public once in the package's settings → *Change visibility → Public*, so the
 > host can pull without a token. After that, nothing else is manual.
 
-## Upgrading an existing deploy to the distroless image
+## Existing data directory ownership
 
-The runtime uid changed from `10001` to `65532` when the final stage moved to
-distroless, because that image has no `useradd` and ships its own `nonroot` user.
-An existing `/opt/hearth/data` is chowned to the old uid, so **the chown has to
-happen or the container cannot open its database.**
+The runtime uid changed from `10001` to `65532` during the earlier distroless
+migration. The owned Wolfi runtime deliberately keeps uid `65532`, so that move
+does not require another ownership change. A deploy which predates the earlier
+migration still needs this one-time correction or the container cannot open its
+database:
 
 ```bash
 ssh "$HOST" 'sudo systemctl stop hearth-deploy.timer && \

@@ -45,6 +45,13 @@ jobs:
         with:
           cosign-release: v3.1.2 # pin the signer; matches the verifier on the deploy host
 
+      # Verify both digest pins against one producer release before Docker consumes them.
+      # This checks its cosign identity plus GitHub provenance and SPDX attestations.
+      - name: Verify owned runtime images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/verify-runtime-images.sh
+
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0

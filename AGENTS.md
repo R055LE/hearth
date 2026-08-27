@@ -43,21 +43,25 @@ can't move what ships without moving what's tested, and nothing catches you if
 you undo it: the tests stay green either way, which is exactly the failure the
 job exists to prevent.
 
-**The distroless runtime has no pip or shell on purpose.** Python dependencies
-are installed from `uv.lock` in the builder and only site-packages are copied to
-the runtime. Do not copy the builder's package manager or shell into the final
-stage; doing so expands the attack surface and changes Trivy's inventory.
+**The owned runtime has no pip or shell on purpose.** Python dependencies are
+installed from `uv.lock` with the ABI-matched build companion, and only
+site-packages are copied to the runtime. Do not copy the builder's package
+manager, compiler, or shell into the final stage; doing so expands the attack
+surface and changes Trivy's inventory.
 
 **`uv.lock` is part of the release input.** CI uses `uv sync --frozen`, and the
 Docker builder does the same. A dependency change is incomplete until the lock
 is refreshed. `backend/requirements-uv.txt` separately pins the build tool that
 reads it.
 
-**The base images are pinned by digest, not just tag.** Dependabot bumps the
-digest and the comment together. Keep both in sync when editing by hand.
+**The base images are pinned and verified as a pair.** Dependabot bumps digest
+pins, but CI also requires both Python variants to match the latest
+`R055LE/runtime-images` release manifest. It verifies that producer's cosign
+identity, provenance, and SPDX attestation before a Hearth image build. Keep
+both pins together when editing by hand.
 
 **`/data` is the only writable path.** The rootfs is read-only and the process
-runs as the distroless `nonroot` uid 65532. Anything that needs to write goes in
+runs as the owned runtime's `nonroot` uid 65532. Anything that needs to write goes in
 the volume.
 
 ## Working here

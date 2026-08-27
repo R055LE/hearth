@@ -80,11 +80,11 @@ migrations on container start, and serves both from one port (default 8000).
 `ghcr.io/r055le/hearth:main` image instead of building locally — that's what
 the deploy host runs.
 
-The container runs as the distroless `nonroot` user (uid/gid `65532`) with a
-read-only rootfs, so before the *first* `up`, create and chown the bind-mounted
-data directory to match: `mkdir -p data && sudo chown 65532:65532 data`.
-Skipping this crash-loops the container on
-"unable to open database file".
+The container runs as the owned Wolfi runtime's `nonroot` user (uid/gid
+`65532`) with a read-only rootfs, so before the *first* `up`, create and chown
+the bind-mounted data directory to match:
+`mkdir -p data && sudo chown 65532:65532 data`. Skipping this crash-loops the
+container on "unable to open database file".
 
 No auth in this phase — intended for tailnet/home-network access only, same
 trust model as other self-hosted services here. See `deploy/README.md` for
