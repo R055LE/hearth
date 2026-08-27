@@ -22,6 +22,60 @@ function centroid(polygon: [number, number][]): [number, number] {
   return [sx / n, sy / n];
 }
 
+function splitRoomLabel(words: string[], lineCount: number): string[] {
+  const lines: string[] = [];
+  let wordIndex = 0;
+
+  for (let lineIndex = 0; lineIndex < lineCount; lineIndex += 1) {
+    if (lineIndex === lineCount - 1) {
+      lines.push(words.slice(wordIndex).join(' '));
+      break;
+    }
+
+    const linesLeft = lineCount - lineIndex;
+    const targetLength = words.slice(wordIndex).join(' ').length / linesLeft;
+    const lastWordIndex = words.length - (linesLeft - 1);
+    let line = words[wordIndex];
+    wordIndex += 1;
+
+    while (wordIndex < lastWordIndex) {
+      const candidate = `${line} ${words[wordIndex]}`;
+      if (
+        Math.abs(candidate.length - targetLength) > Math.abs(line.length - targetLength)
+      ) {
+        break;
+      }
+      line = candidate;
+      wordIndex += 1;
+    }
+    lines.push(line);
+  }
+
+  return lines;
+}
+
+function roomLabelLayout(name: string, polygon: [number, number][]) {
+  const words = name.trim().split(/\s+/);
+  const xs = polygon.map(([x]) => x);
+  const ys = polygon.map(([, y]) => y);
+  const width = Math.max(...xs) - Math.min(...xs);
+  const height = Math.max(...ys) - Math.min(...ys);
+  let best = { lines: [name], fontSize: 0 };
+
+  for (let lineCount = 1; lineCount <= Math.min(6, words.length); lineCount += 1) {
+    const lines = splitRoomLabel(words, lineCount);
+    const longestLine = Math.max(...lines.map((line) => line.length));
+    const fontSize = Math.min(
+      3,
+      (width * 0.9) / (longestLine * 0.6),
+      (height * 0.8) / (lineCount * 1.1),
+    );
+    if (fontSize > best.fontSize) best = { lines, fontSize };
+  }
+
+  return { ...best, lineHeight: best.fontSize * 1.1 };
+}
+
 const KIND_COLORS: Record<string, string> = {
   outlet: '#2563eb',
   switch: '#7c3aed',
@@ -339,14 +393,30 @@ export function FloorplanView({
               <title>{`Floorplan for ${floor}`}</title>
               {plan.rooms.map((room) => {
                 const [cx, cy] = centroid(room.polygon);
+                const label = roomLabelLayout(room.name, room.polygon);
+                const points = room.polygon.map(([x, y]) => `${x},${y}`).join(' ');
                 return (
                   <g key={room.id}>
-                    <polygon
-                      points={room.polygon.map(([x, y]) => `${x},${y}`).join(' ')}
-                      className="room-polygon"
-                    />
-                    <text x={cx} y={cy} className="room-label" textAnchor="middle">
-                      {room.name}
+                    <clipPath id={`room-label-clip-${room.id}`}>
+                      <polygon points={points} />
+                    </clipPath>
+                    <polygon points={points} className="room-polygon" />
+                    <text
+                      className="room-label"
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      clipPath={`url(#room-label-clip-${room.id})`}
+                      style={{ fontSize: label.fontSize }}
+                    >
+                      {label.lines.map((line, index) => (
+                        <tspan
+                          key={`${line}-${index}`}
+                          x={cx}
+                          y={cy + (index - (label.lines.length - 1) / 2) * label.lineHeight}
+                        >
+                          {line}{index < label.lines.length - 1 ? ' ' : ''}
+                        </tspan>
+                      ))}
                     </text>
                   </g>
                 );
