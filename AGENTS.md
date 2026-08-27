@@ -10,19 +10,24 @@ There's no separate deploy step and no staging. `release.yml` builds on every
 push to `main`, and the host polls the published tag **every 5 minutes**, so a
 merge reaches the running service in about that long.
 
-Two things gate it, and both matter:
+The merge and release path has three gates, and each answers a different
+question:
 
+- The `require-hearth-ci` ruleset makes `runtimes`, `backend`, and `frontend`
+  merge requirements. All three are bound to the GitHub Actions App, require a
+  current `main`, and have no bypass actors.
 - `release.yml` runs on `workflow_run` of `ci` with
   `conclusion == 'success'`, so a red or cancelled CI can't publish.
 - It builds, **scans with Trivy, and only then pushes**. A fixable HIGH or
   CRITICAL finding does not reach GHCR under the current gate. The scan is the
   last thing standing between a merge and the host.
-- **Two scans, one blocking.** Per runbook `decisions/0011` everything the
-  scanner finds is printed and only findings with a fix available block the
-  release. The unfixable ones are recorded in `docs/known-findings.md`, not
-  hidden. Before 2026-08-08 a single scan used `ignore-unfixed: true`, which
-  filtered them out of the output entirely, so the workflow reported clean
-  while the image carried 23 CRITICAL/HIGH findings.
+
+The release gate uses two scans. Per runbook `decisions/0011`, everything the
+scanner finds is printed and only findings with a fix available block the
+release. The unfixable ones are recorded in `docs/known-findings.md`, not
+hidden. Before 2026-08-08 a single scan used `ignore-unfixed: true`, which
+filtered them out of the output entirely, so the workflow reported clean while
+the image carried 23 CRITICAL/HIGH findings.
 
 **The Trivy gate does not run on pull requests.** A PR can be green on all
 three checks and still fail the release. That happened on 2026-08-08: the
@@ -87,8 +92,8 @@ For UI changes, use this interaction definition of done:
   not replace this check.
 
 One issue, one branch, one worktree under `.claude/worktrees/<slug>` (already
-gitignored), one PR. `main` is protected with `enforce_admins`, so the PR path
-is forced rather than encouraged. Reviews aren't required, this is solo work.
+gitignored), one PR. `main` requires the PR path plus the `runtimes`, `backend`,
+and `frontend` checks. Reviews aren't required, this is solo work.
 
 Fleet-wide decisions that govern this repo live in
 [`R055LE/runbook/decisions`](https://github.com/R055LE/runbook/tree/main/decisions),
