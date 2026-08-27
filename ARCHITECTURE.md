@@ -68,10 +68,10 @@ grow substantially in a later phase.
 
 ## Docker: the non-root `/data` gotcha
 
-The container runs as the distroless `nonroot` user (uid/gid `65532`), and the
-rootfs is read-only. The only writable path is the `/data` bind mount holding
-the SQLite file. Docker auto-creates a missing bind-mount source directory as
-`root:root`, which the non-root container user can't write into, so **the
+The container runs as the owned Wolfi runtime's `nonroot` user (uid/gid
+`65532`), and the rootfs is read-only. The only writable path is the `/data`
+bind mount holding the SQLite file. Docker auto-creates a missing bind-mount
+source directory as `root:root`, which the non-root container user can't write into, so **the
 host-side `data/` directory must be `chown 65532:65532`'d before the first
 `docker compose up`** or the container crash-loops on "unable to open database
 file". This bit us once during setup; `README.md` calls it out so it doesn't bite
@@ -85,14 +85,17 @@ convenience. `compose.yaml` publishes the service port and the API permits
 destructive writes, so the current posture does not support exposure to an
 untrusted LAN or the public internet.
 
-Inside that boundary, the runtime is deliberately narrow: distroless Python,
-non-root uid `65532`, a read-only root filesystem, and `/data` as the only
-writable mount. Linux capabilities are dropped and privilege escalation is
-disabled. CI and image base references are pinned, Python and JavaScript
-dependencies install from committed locks, and the release workflow reports
-all HIGH/CRITICAL findings before it publishes an SBOM, provenance, and a
-keyless signature. `docs/known-findings.md` records the current non-blocking
-findings and their reachability limits without suppressing them from the report.
+Inside that boundary, the runtime is deliberately narrow: an owned Python
+image composed from signed Wolfi packages, non-root uid `65532`, a read-only
+root filesystem, and `/data` as the only writable mount. It has no shell,
+package manager, pip, or compiler. Linux capabilities are dropped and
+privilege escalation is disabled. CI pins the ABI-matched build and runtime
+images by digest, checks them against one producer release, and verifies the
+producer workflow's signature, provenance, and SBOM before building. Python and
+JavaScript dependencies install from committed locks, and Hearth's release
+workflow scans the complete image before it publishes its own SBOM, provenance,
+and keyless signature. `docs/known-findings.md` records the current measured
+inventory without suppressing findings from the report.
 
 The host deploy resolves the pulled image to an immutable digest and verifies
 that exact digest before starting it. When the digest changes, it creates a

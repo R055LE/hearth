@@ -24,10 +24,15 @@ updates:
     commit-message:
       prefix: chore
 
-  # Track the digest-pinned base images in the Dockerfile.
+  # Track digest-pinned bases. The Python build/runtime pair must move together;
+  # CI rejects a partial pair against the producer's latest release manifest.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: chore
+    groups:
+      owned-python-runtime:
+        patterns:
+          - ghcr.io/r055le/runtime-python

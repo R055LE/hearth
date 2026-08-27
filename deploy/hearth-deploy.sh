@@ -71,7 +71,7 @@ docker run --rm \
   --env DB_PATH=/data/hearth.db \
   --env BACKUP_DIR=/data/backups \
   --env "BACKUP_KEEP=${HEARTH_BACKUP_KEEP:-10}" \
-  --entrypoint /usr/bin/python3.13 \
+  --entrypoint /usr/bin/python \
   "$IMAGE_DIGEST" -m hearth.backup
 
 echo "hearth-deploy: applying"

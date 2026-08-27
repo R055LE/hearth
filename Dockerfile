@@ -7,21 +7,16 @@ RUN npm ci
 COPY frontend ./
 RUN npm run build
 
-# The builder's python minor version must match the runtime's exactly. Wheels with
-# compiled extensions are tagged for one ABI, and hearth ships two of them
-# (pydantic-core, uvloop), so a mismatch produces a site-packages the runtime cannot
-# import. 3.13-slim is paired with distroless python3-debian13 for that reason.
-#
-# This is a downgrade from 3.14. requires-python is >=3.12 so the code is fine, and
-# CI derives its matrix from this line, so the tests follow the runtime down.
-FROM python:3.13-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6 AS builder
+# The build and runtime images are one release set from R055LE/runtime-images.
+# Shared package locks keep their Python ABI exact, and Hearth's CI verifies both
+# digests against that producer's signed release manifest and workflow identity.
+# The rolling tags are readable discovery channels; the digests are the build input.
+FROM ghcr.io/r055le/runtime-python:3.14-build@sha256:7c951603514686397880623806d0f03f9d64575d2e2a4fbdbd78796de1683cd6 AS builder
 WORKDIR /build
 
 # Install the dependency set recorded in uv.lock into a prefix that can be copied
 # wholesale into the final stage. Resolving pyproject ranges independently here made
 # the committed lockfile decorative and allowed repeat builds of one commit to differ.
-COPY backend/requirements-uv.txt ./requirements-uv.txt
-RUN pip install --no-cache-dir --requirement requirements-uv.txt
 COPY backend/pyproject.toml backend/uv.lock backend/README.md ./
 COPY backend/hearth ./hearth
 RUN UV_PROJECT_ENVIRONMENT=/install uv sync --frozen --no-dev --no-editable
@@ -30,28 +25,23 @@ RUN UV_PROJECT_ENVIRONMENT=/install uv sync --frozen --no-dev --no-editable
 # There is no shell in the final stage to mkdir with, so it gets built here and copied.
 RUN mkdir -p /skeleton/data && chown 65532:65532 /skeleton/data
 
-# Distroless: no shell, no package manager, no coreutils. The findings this removes were
-# entirely OS packages the runtime never calls, unfixable by patching because Debian had
-# no fix released. Removing the packages removes the finding, which is the honest
-# resolution rather than suppressing it.
+# The Wolfi runtime is composed by R055LE/runtime-images from signed packages. It has
+# no shell, package manager, pip, or compiler. That repository owns package refreshes,
+# contract tests, risk gating, signatures, and attestations; Hearth still scans and
+# tests the complete application image before publishing it.
 #
 # Consequences, all deliberate:
 #   - No shell, so CMD and HEALTHCHECK are exec-array form and the entrypoint that ran
 #     migrations before startup is now backend/hearth/entrypoint.py.
 #   - The runtime user is the image's built-in nonroot (65532), not hearth (10001).
-#     groupadd and useradd no longer exist. **The /data bind mount on the deploy host
+#     user creation tools do not exist. **The /data bind mount on the deploy host
 #     must be chowned to 65532 or the container cannot write its database.**
 #   - Debugging is `docker cp` and logs, not `docker exec sh`.
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:6bfc400d0a6d89f50f5bbc0a4b4ff57214ae5c01647c3a74c2a0c8d830b4cc00
+FROM ghcr.io/r055le/runtime-python:3.14@sha256:e179ae5027ea72c8d81254d82ec78bf343868c15362d021c856ff7887a99f40f
 
-# Distroless python has no site-packages on sys.path and no /usr/local. Copying the
-# prefix to /usr/local, the usual slim-image pattern, puts dependencies where the
-# interpreter never looks: the image builds, starts, and only breaks when something
-# imports one. Both paths are declared here rather than inferred.
-#
 # /app precedes site-packages so `import hearth` resolves to the source tree, which is
 # what main.py's FRONTEND_DIST walks up from to find ./static.
-COPY --from=builder --chown=nonroot:nonroot /install/lib/python3.13/site-packages /app/site-packages
+COPY --from=builder --chown=nonroot:nonroot /install/lib/python3.14/site-packages /app/site-packages
 ENV PYTHONPATH=/app:/app/site-packages
 
 WORKDIR /app
@@ -64,7 +54,7 @@ COPY --from=builder --chown=nonroot:nonroot /skeleton/data /data
 
 # Declared explicitly even though the base image already defaults to it, so the
 # guarantee is visible here and survives a base image change.
-USER nonroot
+USER 65532:65532
 
 ENV PYTHONUNBUFFERED=1
 ENV DB_PATH=/data/hearth.db
@@ -73,8 +63,8 @@ EXPOSE 8000
 
 # Exec-array form: no shell exists to interpret a string command.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["/usr/bin/python3.13", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/rooms')"]
+  CMD ["/usr/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/rooms')"]
 
 # Migrations run at container start (not at build time) so the schema always matches
 # whatever DB_PATH volume is actually mounted. entrypoint.py does that and then serves.
-ENTRYPOINT ["/usr/bin/python3.13", "-m", "hearth.entrypoint"]
+ENTRYPOINT ["/usr/bin/python", "-m", "hearth.entrypoint"]

@@ -1,6 +1,6 @@
 """Container entrypoint: apply migrations, then serve.
 
-The runtime image is distroless and has no shell, so the previous
+The runtime image has no shell, so the previous
 ``sh -c "alembic upgrade head && exec uvicorn ..."`` has nothing to run it.
 Both steps happen here instead, in one process.
 
