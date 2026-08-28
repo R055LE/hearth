@@ -8,24 +8,12 @@ updates:
     commit-message:
       prefix: ci
 
-  # Update project dependencies and uv.lock together. Leave compatible lower
-  # bounds alone; uv.lock records the version the application actually ships.
+  # Own pyproject.toml, uv.lock, and the separately pinned uv build tool with
+  # one updater. Splitting them across ecosystems can create competing PRs.
   - package-ecosystem: uv
     directory: /backend
     schedule:
       interval: weekly
-    versioning-strategy: increase-if-necessary
-    commit-message:
-      prefix: chore
-
-  # requirements-uv.txt separately pins the build tool that reads uv.lock.
-  # Scope pip to that package so it cannot create manifest-only project bumps.
-  - package-ecosystem: pip
-    directory: /backend
-    schedule:
-      interval: weekly
-    allow:
-      - dependency-name: uv
     commit-message:
       prefix: chore
 
