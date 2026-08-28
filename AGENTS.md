@@ -58,6 +58,8 @@ surface and changes Trivy's inventory.
 `uv sync --locked`, which fails when project metadata and the lock disagree.
 A dependency change is incomplete until the lock is refreshed.
 `backend/requirements-uv.txt` separately pins the build tool that reads it.
+Dependabot's native `uv` ecosystem owns the manifest, lock and build-tool pin
+together so competing update jobs cannot disagree about the release input.
 
 **The base images are pinned and verified as a pair.** Dependabot bumps digest
 pins, but CI also requires both Python variants to match the latest
