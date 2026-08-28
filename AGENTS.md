@@ -54,10 +54,10 @@ site-packages are copied to the runtime. Do not copy the builder's package
 manager, compiler, or shell into the final stage; doing so expands the attack
 surface and changes Trivy's inventory.
 
-**`uv.lock` is part of the release input.** CI uses `uv sync --frozen`, and the
-Docker builder does the same. A dependency change is incomplete until the lock
-is refreshed. `backend/requirements-uv.txt` separately pins the build tool that
-reads it.
+**`uv.lock` is part of the release input.** CI and the Docker builder use
+`uv sync --locked`, which fails when project metadata and the lock disagree.
+A dependency change is incomplete until the lock is refreshed.
+`backend/requirements-uv.txt` separately pins the build tool that reads it.
 
 **The base images are pinned and verified as a pair.** Dependabot bumps digest
 pins, but CI also requires both Python variants to match the latest

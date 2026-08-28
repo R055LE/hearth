@@ -19,7 +19,7 @@ WORKDIR /build
 # the committed lockfile decorative and allowed repeat builds of one commit to differ.
 COPY backend/pyproject.toml backend/uv.lock backend/README.md ./
 COPY backend/hearth ./hearth
-RUN UV_PROJECT_ENVIRONMENT=/install uv sync --frozen --no-dev --no-editable
+RUN UV_PROJECT_ENVIRONMENT=/install uv sync --locked --no-dev --no-editable
 
 # /data has to exist in the image with the right ownership before the bind mount lands.
 # There is no shell in the final stage to mkdir with, so it gets built here and copied.

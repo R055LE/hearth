@@ -96,11 +96,11 @@ jobs:
       - name: Install uv
         run: pip install --requirement requirements-uv.txt
       - name: Install locked dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --locked --extra dev
       - name: Lint
-        run: uv run --frozen ruff check .
+        run: uv run --locked ruff check .
       - name: Test
-        run: uv run --frozen pytest --cov=hearth --cov-report=term-missing
+        run: uv run --locked pytest --cov=hearth --cov-report=term-missing
 
   frontend:
     runs-on: ubuntu-latest
