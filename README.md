@@ -19,6 +19,9 @@ Circuit-walk capture at phone width:
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's put together and why.
 
+The [September 2026 UX review](docs/ux/2026-09-08/report.md) records findings,
+reproduction evidence, and the remediation plan.
+
 ## Layout
 
 - `backend/` — FastAPI + SQLAlchemy + Alembic, SQLite storage
