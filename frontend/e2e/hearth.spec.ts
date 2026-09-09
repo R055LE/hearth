@@ -342,7 +342,86 @@ async function clickFloorplan(page: Page, xRatio: number, yRatio: number) {
   await floorplan.click({ position: { x: box.width * xRatio, y: box.height * yRatio } });
 }
 
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+  test(`preserves maintenance drafts across sections at ${viewport.width}px`, async ({ page }) => {
+    const state = await mockApi(page);
+    const writes: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/api/') && request.method() !== 'GET') {
+        writes.push(request.method());
+      }
+    });
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Maintenance', exact: true }).click();
+    await page.getByRole('button', { name: 'Add task', exact: true }).click();
+
+    const form = page.getByRole('form', { name: 'Add maintenance task' });
+    const dueDate = localDate(14);
+    await form.getByRole('textbox', { name: 'Task', exact: true }).fill('Replace HVAC filter');
+    await form.getByRole('combobox', { name: 'Room', exact: true }).selectOption('1');
+    await form.getByLabel('Due date').fill(dueDate);
+    await form.getByRole('combobox', { name: 'Schedule' }).selectOption('repeat');
+    await form.getByRole('spinbutton', { name: 'Interval days' }).fill('90');
+    await form.getByRole('textbox', { name: 'Notes' }).fill('Use the spare filter.');
+
+    for (const section of ['Rooms', 'Panels & circuits', 'Floorplan']) {
+      await page.getByRole('button', { name: section, exact: true }).click();
+      await expect(form).toBeHidden();
+      await page.getByRole('button', { name: 'Maintenance', exact: true }).click();
+      await expect(form).toBeVisible();
+      await expect(form.getByRole('textbox', { name: 'Task', exact: true })).toHaveValue(
+        'Replace HVAC filter',
+      );
+      await expect(form.getByRole('combobox', { name: 'Room', exact: true })).toHaveValue('1');
+      await expect(form.getByLabel('Due date')).toHaveValue(dueDate);
+      await expect(form.getByRole('combobox', { name: 'Schedule' })).toHaveValue('repeat');
+      await expect(form.getByRole('spinbutton', { name: 'Interval days' })).toHaveValue('90');
+      await expect(form.getByRole('textbox', { name: 'Notes' })).toHaveValue('Use the spare filter.');
+    }
+    expect(writes).toEqual([]);
+    expect(state.createdMaintenanceTasks).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      viewport.width,
+    );
+
+    await page.getByRole('button', { name: 'Rooms', exact: true }).click();
+    await page.getByRole('button', { name: 'Edit room details for Garage' }).click();
+    await page.getByRole('textbox', { name: 'Room name', exact: true }).fill('Garage workshop');
+    await page.getByRole('button', { name: 'Save details' }).click();
+    await expect.poll(() => state.updatedRoom).toMatchObject({ name: 'Garage workshop' });
+    await page.getByRole('button', { name: 'Maintenance', exact: true }).click();
+    await expect(form.getByRole('combobox', { name: 'Room', exact: true }).locator('option:checked'))
+      .toHaveText('Garage workshop');
+    expect(state.createdMaintenanceTasks).toEqual([]);
+
+    await form.getByRole('button', { name: 'Create task' }).click();
+    await expect(page.getByRole('article', { name: 'Replace HVAC filter' })).toBeVisible();
+    expect(state.createdMaintenanceTasks).toEqual([{
+      title: 'Replace HVAC filter',
+      room_id: 1,
+      due_date: dueDate,
+      recurrence_days: 90,
+      notes: 'Use the spare filter.',
+    }]);
+    expect(writes).toEqual(['PATCH', 'POST']);
+
+    await page.getByRole('button', { name: 'Rooms', exact: true }).click();
+    await page.getByRole('button', { name: 'Maintenance', exact: true }).click();
+    await expect(form).toBeHidden();
+    await expect(page.getByRole('article', { name: 'Replace HVAC filter' })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Add task', exact: true }).click();
+    await expect(form.getByRole('textbox', { name: 'Task', exact: true })).toHaveValue('');
+  });
+}
+
 test('groups maintenance work and keeps creation contextual on mobile', async ({ page }) => {
+  const writes: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/api/') && request.method() !== 'GET') {
+      writes.push(request.method());
+    }
+  });
   const state = await mockApi(page, {
     maintenanceTasks: [
       maintenanceTask(),
@@ -386,12 +465,23 @@ test('groups maintenance work and keeps creation contextual on mobile', async ({
   await form.getByRole('combobox', { name: 'Schedule' }).selectOption('repeat');
   await form.getByRole('spinbutton', { name: 'Interval days' }).fill('180');
   await form.getByRole('textbox', { name: 'Notes' }).fill('Drain until the water runs clear.');
+  await page.getByRole('button', { name: 'Rooms', exact: true }).click();
+  await page.getByRole('button', { name: 'Maintenance', exact: true }).click();
   await form.getByRole('button', { name: 'Cancel adding task' }).click();
+  expect(writes).toEqual([]);
   expect(state.createdMaintenanceTasks).toEqual([]);
   await expect(page.locator('form')).toHaveCount(0);
 
   await addTask.click();
   const savedForm = page.getByRole('form', { name: 'Add maintenance task' });
+  await expect(savedForm.getByRole('textbox', { name: 'Task', exact: true })).toHaveValue('');
+  await expect(savedForm.getByRole('combobox', { name: 'Room', exact: true })).toHaveValue('');
+  await expect(savedForm.getByLabel('Due date')).toHaveValue(localDate());
+  await expect(savedForm.getByRole('combobox', { name: 'Schedule' })).toHaveValue('once');
+  await expect(savedForm.getByRole('textbox', { name: 'Notes' })).toHaveValue('');
+  await savedForm.getByRole('combobox', { name: 'Schedule' }).selectOption('repeat');
+  await expect(savedForm.getByRole('spinbutton', { name: 'Interval days' })).toHaveValue('30');
+  await savedForm.getByRole('combobox', { name: 'Schedule' }).selectOption('once');
   await savedForm.getByRole('textbox', { name: 'Task' }).fill('Flush water heater');
   await savedForm.getByLabel('Due date').fill(localDate(14));
   await savedForm.getByRole('button', { name: 'Create task' }).click();

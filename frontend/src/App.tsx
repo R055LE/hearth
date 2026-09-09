@@ -51,7 +51,7 @@ function App() {
         )}
         {tab === 'rooms' && <RoomEditor />}
         {tab === 'panels' && <PanelEditor onViewCircuit={openFloorplan} />}
-        {tab === 'maintenance' && <MaintenanceView />}
+        <MaintenanceView active={tab === 'maintenance'} />
       </main>
     </div>
   );
