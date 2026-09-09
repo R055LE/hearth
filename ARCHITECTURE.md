@@ -67,6 +67,12 @@ or routing dependency. Room, circuit, and floor selections aren't encoded in the
 URL. Maintenance drafts survive section changes, including Back/Forward, while
 the app stays mounted; reloading discards unsaved drafts.
 
+Navigation and Rooms controls use a 44px minimum touch height with visible
+keyboard focus. Below 700px, navigation forms a two-column grid and wall entries
+put removal on a separate row beneath measurements. These rules are scoped to
+navigation and Rooms so changes to the floorplan and circuit-walk controls can
+be checked against their own layout constraints.
+
 Plain `fetch` + component state — no React Query or Redux. Floorplan rendering is
 hand-rolled SVG (`<polygon>` for rooms, `<circle>` for circuit points), not a
 diagramming library — the interaction surface (click a point, click a breaker,

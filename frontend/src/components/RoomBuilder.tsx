@@ -6,11 +6,11 @@ import type { MeasurementSource, Room } from '../types';
 
 const CLOSURE_EPSILON_FT = 1 / 12;
 
-const HEADINGS: { label: string; deg: number }[] = [
-  { label: '↑', deg: 270 },
-  { label: '↓', deg: 90 },
-  { label: '←', deg: 180 },
-  { label: '→', deg: 0 },
+const HEADINGS: { label: string; direction: string; deg: number }[] = [
+  { label: '↑', direction: 'up', deg: 270 },
+  { label: '↓', direction: 'down', deg: 90 },
+  { label: '←', direction: 'left', deg: 180 },
+  { label: '→', direction: 'right', deg: 0 },
 ];
 
 function roomWalls(room: Room): { from: [number, number]; to: [number, number] }[] {
@@ -361,6 +361,8 @@ export function RoomBuilder({
                     key={h.deg}
                     type="button"
                     className={start.heading_deg === h.deg ? 'active' : ''}
+                    aria-label={`First wall direction ${h.direction}`}
+                    aria-pressed={start.heading_deg === h.deg}
                     onClick={() => setStart((s) => ({ ...s, heading_deg: h.deg }))}
                   >
                     {h.label}
@@ -412,6 +414,8 @@ export function RoomBuilder({
                     key={h.deg}
                     type="button"
                     className={anchorHeadingDeg === h.deg ? 'active' : ''}
+                    aria-label={`First wall direction ${h.direction}`}
+                    aria-pressed={anchorHeadingDeg === h.deg}
                     onClick={() => setAnchorHeadingDeg(h.deg)}
                   >
                     {h.label}
@@ -472,22 +476,24 @@ export function RoomBuilder({
                     deg
                   </label>
                 )}
-                <button type="button" onClick={() => removeWall(i)}>
+                <button className="wall-remove" type="button" onClick={() => removeWall(i)}>
                   Remove wall {i + 1}
                 </button>
               </li>
             ))}
           </ul>
-          <div className="inline-form">
+          <div className="wall-entry">
             <input
               type="number"
               placeholder="ft"
+              aria-label="New wall feet"
               value={draftFeet}
               onChange={(e) => setDraftFeet(e.target.value)}
             />
             <input
               type="number"
               placeholder="in"
+              aria-label="New wall inches"
               value={draftInches}
               onChange={(e) => setDraftInches(e.target.value)}
             />
@@ -505,10 +511,13 @@ export function RoomBuilder({
               <input
                 type="number"
                 placeholder="deg"
+                aria-label="New wall custom turn degrees"
                 value={draftCustomDeg}
                 onChange={(e) => setDraftCustomDeg(e.target.value)}
               />
             )}
+          </div>
+          <div className="form-actions wall-entry-actions">
             <button type="button" onClick={addWall}>
               Add wall
             </button>

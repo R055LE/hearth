@@ -15,9 +15,29 @@
   margin-bottom: 1rem;
 }
 
-.tabs button.active {
+.tabs button,
+.room-editor button,
+.room-editor input:not([type='radio']),
+.room-editor select {
+  box-sizing: border-box;
+  min-height: 44px;
+  min-width: 44px;
+  max-width: 100%;
+  padding: 0.5rem;
+  font: inherit;
+}
+
+.tabs button:focus-visible,
+.room-editor :is(button, input, select):focus-visible {
+  outline: 2px solid CanvasText;
+  outline-offset: 2px;
+}
+
+.tabs button.active,
+.heading-buttons button.active {
   font-weight: bold;
-  text-decoration: underline;
+  background: CanvasText;
+  color: Canvas;
 }
 
 .floorplan-layout {
@@ -320,6 +340,36 @@
   gap: 1.5rem;
 }
 
+.room-builder > form {
+  flex: 1;
+  min-width: 0;
+}
+
+.room-builder fieldset {
+  min-width: 0;
+  margin-bottom: 1rem;
+}
+
+.room-builder .stacked-form > label,
+.room-builder fieldset > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.room-builder label:has(input[type='radio']) {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+}
+
+.room-builder input:not([type='radio']),
+.room-builder select {
+  min-width: 0;
+  width: 100%;
+}
+
 .room-builder-preview {
   flex: 1;
   min-width: 0;
@@ -331,13 +381,9 @@
 
 .heading-buttons {
   display: flex;
-  gap: 0.25rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin-bottom: 0.5rem;
-}
-
-.heading-buttons button.active {
-  font-weight: bold;
-  color: #f97316;
 }
 
 .wall-list {
@@ -351,7 +397,9 @@
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
-  margin-bottom: 0.5rem;
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #999;
 }
 
 .wall-row label {
@@ -361,8 +409,27 @@
   margin: 0;
 }
 
-.wall-row input {
+.room-builder .wall-row input {
   width: 5rem;
+}
+
+.room-builder .wall-row select {
+  width: auto;
+}
+
+.wall-remove {
+  margin-left: 0.5rem;
+}
+
+.wall-entry {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.wall-entry-actions {
+  margin-top: 1rem;
+  gap: 1rem;
 }
 
 .draft-room-outline {
@@ -454,6 +521,36 @@
 }
 
 @media (max-width: 700px) {
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .room-editor table {
+    table-layout: fixed;
+    overflow-wrap: anywhere;
+  }
+
+  .wall-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wall-row > strong,
+  .wall-row > select,
+  .wall-row > .wall-remove {
+    grid-column: 1 / -1;
+  }
+
+  .room-builder .wall-row input {
+    width: 100%;
+  }
+
+  .wall-remove {
+    justify-self: end;
+    margin: 0.5rem 0 0;
+  }
+
   .floorplan-layout,
   .room-builder {
     flex-direction: column;

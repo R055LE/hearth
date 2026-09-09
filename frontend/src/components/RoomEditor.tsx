@@ -63,7 +63,7 @@ export function RoomEditor() {
   }
 
   return (
-    <div>
+    <div className="room-editor">
       <h2>Rooms</h2>
       {error && <p className="error">{error}</p>}
       <table>
