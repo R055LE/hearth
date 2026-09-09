@@ -59,6 +59,14 @@ API sidesteps that entirely rather than relying on route-matching order to save 
 
 ## Frontend
 
+Top-level sections use URL fragments: `#floorplan`, `#rooms`, `#panels`, and
+`#maintenance`. Refresh and bookmarks retain the section; Back/Forward follows
+section changes. An empty or unknown fragment opens Floorplan. Fragments keep
+direct loads on the static server's existing `/` route without a server fallback
+or routing dependency. Room, circuit, and floor selections aren't encoded in the
+URL. Maintenance drafts survive section changes, including Back/Forward, while
+the app stays mounted; reloading discards unsaved drafts.
+
 Plain `fetch` + component state — no React Query or Redux. Floorplan rendering is
 hand-rolled SVG (`<polygon>` for rooms, `<circle>` for circuit points), not a
 diagramming library — the interaction surface (click a point, click a breaker,

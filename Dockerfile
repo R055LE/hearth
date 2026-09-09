@@ -11,7 +11,7 @@ RUN npm run build
 # Shared package locks keep their Python ABI exact, and Hearth's CI verifies both
 # digests against that producer's signed release manifest and workflow identity.
 # The rolling tags are readable discovery channels; the digests are the build input.
-FROM ghcr.io/r055le/runtime-python:3.14-build@sha256:b6e10d9e9dada47b4016fa26ff5f06f7083fe8ef2581782af09e45a9cd321fb1 AS builder
+FROM ghcr.io/r055le/runtime-python:3.14-build@sha256:c887c98910222dd0f58e0eb79b0893a604c667c7efcb6069e41f50fadb2e4f0a AS builder
 WORKDIR /build
 
 # Install the dependency set recorded in uv.lock into a prefix that can be copied
@@ -37,7 +37,7 @@ RUN mkdir -p /skeleton/data && chown 65532:65532 /skeleton/data
 #     user creation tools do not exist. **The /data bind mount on the deploy host
 #     must be chowned to 65532 or the container cannot write its database.**
 #   - Debugging is `docker cp` and logs, not `docker exec sh`.
-FROM ghcr.io/r055le/runtime-python:3.14@sha256:9a105d923b0c950a3f5f7353742f049f03ea312d4a5db4e6edf0402d2df6ebac
+FROM ghcr.io/r055le/runtime-python:3.14@sha256:ad62dab75fdac8d799132ae99585d2d2475065f37a04e7455fa48ed8eb1e376a
 
 # /app precedes site-packages so `import hearth` resolves to the source tree, which is
 # what main.py's FRONTEND_DIST walks up from to find ./static.
