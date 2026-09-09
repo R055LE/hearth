@@ -929,6 +929,70 @@ test('keeps long room labels inside room geometry at desktop and phone width', a
   }
 });
 
+for (const layout of ['small', 'multiple']) {
+  test(`shows the selected breaker in view on phones with ${layout} rooms`, async ({ page }) => {
+    const rooms = layout === 'small' ? [room] : [room,
+      { ...room, id: 2, name: 'Kitchen', polygon: [[20, 0], [34, 0], [34, 12], [20, 12]] },
+      { ...room, id: 3, name: 'Hall', polygon: [[10, 10], [20, 10], [20, 26], [10, 26]] },
+    ];
+    const state = await mockApi(page, { rooms });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
+    await marker.click();
+    const answer = page.getByText('Circuit: Main panel — breaker 1', { exact: true });
+    await expect(answer).toBeInViewport({ ratio: 1 });
+    const details = page.getByRole('region', { name: 'Selected point' });
+    await expect(details).toBeFocused();
+    await page.getByRole('button', { name: 'Back to map', exact: true }).click();
+    await expect(marker).toBeFocused();
+    await expect(marker).toBeInViewport({ ratio: 1 });
+    const target = await marker.boundingBox();
+    await page.mouse.click(target!.x + target!.width / 2 + 18, target!.y + target!.height / 2);
+    await expect(details).toBeFocused();
+    await page.getByRole('button', { name: 'Back to map', exact: true }).click();
+    await page.keyboard.press('Enter');
+    await expect(details).toBeFocused();
+    await expect(answer).toBeInViewport({ ratio: 1 });
+    const map = await page.locator('.floorplan-main .floorplan-svg').boundingBox();
+    expect(map!.height).toBeLessThanOrEqual(362);
+    const symbol = await page.locator('.point-symbol').first().boundingBox();
+    expect(symbol!.width).toBeLessThanOrEqual(24);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await page.getByRole('button', { name: 'Edit point', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Label:' }).fill('Discard this');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(state.updatedPoint).toBeNull();
+    await expect(answer).toBeInViewport({ ratio: 1 });
+    await page.getByRole('button', { name: 'Move point', exact: true }).click();
+    await expect(marker).toBeFocused();
+    await expect(marker).toBeInViewport({ ratio: 1 });
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(state.updatedPoint).toBeNull();
+    await expect(details).toBeFocused();
+    await page.getByRole('button', { name: 'Back to map', exact: true }).click();
+    await page.getByRole('button', { name: 'Walk circuit', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Circuit walk', exact: true })).toBeInViewport();
+    await page.getByRole('button', { name: 'Finish walk', exact: true }).click();
+    expect(state.createdPoints).toEqual([]);
+  });
+}
+
+test('keeps selected-point details beside the desktop map without moving focus', async ({ page }) => {
+  await mockApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
+  await marker.focus();
+  await page.keyboard.press('Enter');
+  await expect(marker).toBeFocused();
+  const map = await page.locator('.floorplan-main').boundingBox();
+  const answer = page.getByText('Circuit: Main panel — breaker 1', { exact: true });
+  await expect(answer).toBeVisible();
+  expect((await answer.boundingBox())!.x).toBeGreaterThan(map!.x + map!.width);
+  await expect(page.getByRole('button', { name: 'Back to map' })).toBeHidden();
+});
+
 test('makes the floorplan controls keyboard-operable and named', async ({ page }) => {
   await mockApi(page);
   await page.goto('/');
@@ -995,7 +1059,7 @@ test('shows panel status and opens mapped breakers on the floorplan', async ({ p
   await mappedBreaker.getByRole('button', { name: 'View breaker 1 on floorplan' }).click();
   await expect(page.getByRole('heading', { level: 2, name: 'Floorplan' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Breaker 1 — Garage/ })).toHaveClass(/selected/);
-  await expect(page.getByRole('button', { name: 'outlet: North wall outlet' })).toHaveAttribute(
+  await expect(page.locator('[data-point-id="1"] + .point-symbol')).toHaveAttribute(
     'stroke',
     '#f97316',
   );

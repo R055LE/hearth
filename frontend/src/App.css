@@ -83,9 +83,23 @@
   outline: none;
 }
 
-.point-marker:focus-visible {
-  stroke: #f97316;
-  stroke-width: 0.8;
+.point-marker:focus-visible + .point-symbol {
+  stroke: #111;
+  stroke-width: 3;
+}
+
+.back-to-map {
+  display: none;
+}
+
+.point-details {
+  scroll-margin-top: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.point-details:focus-visible {
+  outline: 2px solid CanvasText;
+  outline-offset: 2px;
 }
 
 .floorplan-sidebar {
@@ -563,6 +577,21 @@
   .floorplan-svg {
     min-height: 360px;
     height: 55vh;
+  }
+
+  .floorplan-main .floorplan-svg {
+    min-height: 240px;
+    height: min(42svh, 360px);
+  }
+
+  .back-to-map {
+    display: inline-block;
+  }
+
+  .point-details button {
+    min-height: 44px;
+    padding: 0.5rem;
+    font: inherit;
   }
 
   .floorplan-layout.walking {

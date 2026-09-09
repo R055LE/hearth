@@ -73,6 +73,13 @@ put removal on a separate row beneath measurements. These rules are scoped to
 navigation and Rooms so changes to the floorplan and circuit-walk controls can
 be checked against their own layout constraints.
 
+On phones, selecting a floorplan point focuses and scrolls its existing detail
+card into view. The breaker answer comes first, and Back to map returns focus to
+the selected point. Desktop selection keeps focus on the map with details beside
+it. Map padding follows the home's bounds, and phone map height is capped.
+Visible point symbols stay small when selected, with a separate transparent tap
+area so the selection highlight doesn't grow over room labels.
+
 Plain `fetch` + component state — no React Query or Redux. Floorplan rendering is
 hand-rolled SVG (`<polygon>` for rooms, `<circle>` for circuit points), not a
 diagramming library — the interaction surface (click a point, click a breaker,

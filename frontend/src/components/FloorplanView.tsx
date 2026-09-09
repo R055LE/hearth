@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { roomContainingPoint } from '../floorplanGeometry';
 import type { Circuit, CircuitPoint, Floorplan, Panel, Room } from '../types';
@@ -116,6 +116,26 @@ export function FloorplanView({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const pointDetailsRef = useRef<HTMLDivElement>(null);
+
+  function revealPointDetails() {
+    if (!window.matchMedia('(max-width: 700px)').matches) return;
+    pointDetailsRef.current?.focus({ preventScroll: true });
+    pointDetailsRef.current?.scrollIntoView({ block: 'start' });
+  }
+
+  useEffect(() => {
+    if (mode === 'idle' && selectedPointId !== null) revealPointDetails();
+    if (mode === 'move' && window.matchMedia('(max-width: 700px)').matches) returnToPoint(selectedPointId);
+  }, [mode, selectedPointId]);
+
+  function returnToPoint(pointId: number | null) {
+    const marker = svgRef.current?.querySelector<SVGCircleElement>(
+      `[data-point-id="${pointId}"]`,
+    );
+    marker?.focus({ preventScroll: true });
+    marker?.scrollIntoView({ block: 'center' });
+  }
 
   const floors = useMemo(
     () => Array.from(new Set(allRooms.map((r) => r.floor))).sort(),
@@ -160,7 +180,8 @@ export function FloorplanView({
       ys.push(point.y);
     }
     if (xs.length === 0) return { minX: 0, minY: 0, width: 100, height: 100 };
-    const pad = 5;
+    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    const pad = Math.max(1, span * 0.05);
     const minX = Math.min(...xs) - pad;
     const minY = Math.min(...ys) - pad;
     const width = Math.max(...xs) - minX + pad;
@@ -214,6 +235,7 @@ export function FloorplanView({
 
   function selectPoint(point: CircuitPoint) {
     if (mode !== 'idle') return;
+    if (selectedPointId === point.id) revealPointDetails();
     setSelectedPointId(point.id);
     setSelectedCircuitId(point.circuit_id);
     setDraftPoint(null);
@@ -346,6 +368,7 @@ export function FloorplanView({
   const selectedPoint = plan.circuit_points.find((p) => p.id === selectedPointId) ?? null;
   const selectedCircuit = circuits.find((c) => c.id === selectedCircuitId) ?? null;
   const activeEdit = mode === 'edit' || mode === 'move';
+  const markerRadius = Math.max(bounds.width, bounds.height) * 0.018;
 
   return (
     <section aria-labelledby="floorplan-heading">
@@ -429,30 +452,45 @@ export function FloorplanView({
                 const isSelectedPoint = point.id === selectedPointId;
                 const isSelectedCircuit = point.circuit_id === selectedCircuitId;
                 return (
-                  <circle
-                    key={point.id}
-                    cx={point.x}
-                    cy={point.y}
-                    r={isSelectedPoint ? 2.2 : 1.5}
-                    fill={colorForKind(point.kind)}
-                    stroke={isSelectedCircuit ? '#f97316' : 'none'}
-                    strokeWidth={0.6}
-                    className="point-marker"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={pointAccessibleLabel(point)}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      selectPoint(point);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter' && e.key !== ' ') return;
-                      e.preventDefault();
-                      selectPoint(point);
-                    }}
-                  >
-                    <title>{pointAccessibleLabel(point)}</title>
-                  </circle>
+                  <Fragment key={point.id}>
+                    <circle
+                      data-point-id={point.id}
+                      cx={point.x}
+                      cy={point.y}
+                      r={markerRadius}
+                      fill="transparent"
+                      stroke="transparent"
+                      strokeWidth={32}
+                      vectorEffect="non-scaling-stroke"
+                      className="point-marker"
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isSelectedPoint}
+                      aria-label={pointAccessibleLabel(point)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectPoint(point);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        e.preventDefault();
+                        selectPoint(point);
+                      }}
+                    >
+                      <title>{pointAccessibleLabel(point)}</title>
+                    </circle>
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r={markerRadius}
+                      fill={colorForKind(point.kind)}
+                      stroke={isSelectedCircuit ? '#f97316' : '#fff'}
+                      strokeWidth={isSelectedPoint ? 3 : 2}
+                      vectorEffect="non-scaling-stroke"
+                      className="point-symbol"
+                      pointerEvents="none"
+                    />
+                  </Fragment>
                 );
               })}
               {draftPoint && !activeEdit && (
@@ -491,11 +529,17 @@ export function FloorplanView({
               onSubmit={saveDraft}
             />
           ) : selectedPoint && mode === 'idle' ? (
-            <div className="info-card">
+            <div
+              className="info-card point-details"
+              ref={pointDetailsRef}
+              role="region"
+              aria-label="Selected point"
+              tabIndex={-1}
+            >
               <h3>{selectedPoint.kind}</h3>
+              <p>Circuit: {circuitLabel(selectedPoint.circuit_id)}</p>
               {selectedPoint.label && <p>{selectedPoint.label}</p>}
               <p>Room: {allRooms.find((r) => r.id === selectedPoint.room_id)?.name}</p>
-              <p>Circuit: {circuitLabel(selectedPoint.circuit_id)}</p>
               {selectedCircuit?.verified_description && (
                 <p>Confirmed: {selectedCircuit.verified_description}</p>
               )}
@@ -503,6 +547,7 @@ export function FloorplanView({
                 <p>Panel says: {selectedCircuit.panel_sticker_text}</p>
               )}
               <div className="form-actions">
+                <button className="back-to-map" type="button" onClick={() => returnToPoint(selectedPointId)}>Back to map</button>
                 <button type="button" onClick={() => beginEdit(false)}>Edit point</button>
                 <button type="button" onClick={() => beginEdit(true)}>Move point</button>
                 <button type="button" onClick={deleteSelectedPoint}>Delete point</button>
