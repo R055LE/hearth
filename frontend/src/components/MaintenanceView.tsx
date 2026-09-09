@@ -32,7 +32,7 @@ const GROUPS = [
   { key: 'completed', label: 'Completed' },
 ] as const;
 
-export function MaintenanceView() {
+export function MaintenanceView({ active }: { active: boolean }) {
   const [tasks, setTasks] = useState<MaintenanceTask[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [adding, setAdding] = useState(false);
@@ -50,8 +50,8 @@ export function MaintenanceView() {
   }
 
   useEffect(() => {
-    refresh();
-  }, []);
+    if (active) refresh();
+  }, [active]);
 
   const groupedTasks = useMemo(
     () =>
@@ -77,7 +77,7 @@ export function MaintenanceView() {
   }
 
   return (
-    <section aria-labelledby="maintenance-heading">
+    <section aria-labelledby="maintenance-heading" hidden={!active}>
       <h2 id="maintenance-heading">Maintenance</h2>
       {error && <p className="error">{error}</p>}
       {tasks.length === 0 && !adding && <p>No maintenance tasks yet.</p>}
