@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FloorplanView } from './components/FloorplanView';
 import { MaintenanceView } from './components/MaintenanceView';
 import { RoomEditor } from './components/RoomEditor';
@@ -7,16 +7,35 @@ import './App.css';
 
 type Tab = 'floorplan' | 'rooms' | 'panels' | 'maintenance';
 
+function tabFromLocation(): Tab {
+  switch (window.location.hash) {
+    case '#rooms': return 'rooms';
+    case '#panels': return 'panels';
+    case '#maintenance': return 'maintenance';
+    default: return 'floorplan';
+  }
+}
+
 function App() {
-  const [tab, setTab] = useState<Tab>('floorplan');
+  const [tab, setTab] = useState<Tab>(tabFromLocation);
   const [floorplanTarget, setFloorplanTarget] = useState<{
     circuitId: number;
     floor: string;
   } | null>(null);
 
+  useEffect(() => {
+    const onHashChange = () => setTab(tabFromLocation());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  function openTab(nextTab: Tab) {
+    window.location.hash = nextTab;
+  }
+
   function openFloorplan(circuitId?: number, floor?: string) {
     setFloorplanTarget(circuitId != null && floor ? { circuitId, floor } : null);
-    setTab('floorplan');
+    openTab('floorplan');
   }
 
   return (
@@ -27,15 +46,15 @@ function App() {
           <button className={tab === 'floorplan' ? 'active' : ''} onClick={() => openFloorplan()}>
             Floorplan
           </button>
-          <button className={tab === 'rooms' ? 'active' : ''} onClick={() => setTab('rooms')}>
+          <button className={tab === 'rooms' ? 'active' : ''} onClick={() => openTab('rooms')}>
             Rooms
           </button>
-          <button className={tab === 'panels' ? 'active' : ''} onClick={() => setTab('panels')}>
+          <button className={tab === 'panels' ? 'active' : ''} onClick={() => openTab('panels')}>
             Panels &amp; circuits
           </button>
           <button
             className={tab === 'maintenance' ? 'active' : ''}
-            onClick={() => setTab('maintenance')}
+            onClick={() => openTab('maintenance')}
           >
             Maintenance
           </button>
@@ -46,7 +65,7 @@ function App() {
           <FloorplanView
             initialCircuitId={floorplanTarget?.circuitId}
             initialFloor={floorplanTarget?.floor}
-            onOpenRooms={() => setTab('rooms')}
+            onOpenRooms={() => openTab('rooms')}
           />
         )}
         {tab === 'rooms' && <RoomEditor />}

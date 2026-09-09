@@ -343,6 +343,78 @@ async function clickFloorplan(page: Page, xRatio: number, yRatio: number) {
 }
 
 for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+  test(`restores section URLs on direct loads and refresh at ${viewport.width}px`, async ({ page }) => {
+    await mockApi(page, { maintenanceTasks: [maintenanceTask()] });
+    const writes: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/api/') && request.method() !== 'GET') {
+        writes.push(request.method());
+      }
+    });
+    await page.setViewportSize(viewport);
+    for (const [fragment, heading] of [
+      ['floorplan', 'Floorplan'],
+      ['rooms', 'Rooms'],
+      ['panels', 'Panels & circuits'],
+      ['maintenance', 'Maintenance'],
+    ]) {
+      await page.goto(`/#${fragment}`);
+      await expect(page.getByRole('heading', { level: 2, name: heading, exact: true })).toBeVisible();
+      await expect(page.locator('nav .active')).toHaveText(heading);
+      await page.reload();
+      await expect(page.getByRole('heading', { level: 2, name: heading, exact: true })).toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`#${fragment}$`));
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+    }
+    await expect(page.getByRole('article', { name: 'Replace furnace filter' })).toBeVisible();
+    for (const url of ['/', '/#unknown-section']) {
+      await page.goto(url);
+      await expect(page.getByRole('heading', { level: 2, name: 'Floorplan', exact: true })).toBeVisible();
+      await page.reload();
+      await expect(page.getByRole('heading', { level: 2, name: 'Floorplan', exact: true })).toBeVisible();
+    }
+    expect(writes).toEqual([]);
+  });
+
+  test(`navigates browser history without losing maintenance drafts at ${viewport.width}px`, async ({ page }) => {
+    const state = await mockApi(page);
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    for (const [name, fragment] of [
+      ['Rooms', 'rooms'],
+      ['Panels & circuits', 'panels'],
+      ['Maintenance', 'maintenance'],
+    ]) {
+      await page.getByRole('button', { name, exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`#${fragment}$`));
+    }
+    await page.getByRole('button', { name: 'Add task', exact: true }).click();
+    const form = page.getByRole('form', { name: 'Add maintenance task' });
+    await form.getByRole('textbox', { name: 'Task', exact: true }).fill('Keep this draft');
+    // Selecting the current section must not add a duplicate history entry.
+    await page.getByRole('button', { name: 'Maintenance', exact: true }).click();
+    await page.goBack();
+    await expect(page.getByRole('heading', { level: 2, name: 'Panels & circuits' })).toBeVisible();
+    await expect(form).toBeHidden();
+    await page.goBack();
+    await expect(page.getByRole('heading', { level: 2, name: 'Rooms', exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole('heading', { level: 2, name: 'Floorplan' })).toBeVisible();
+    await page.goForward();
+    await expect(page.getByRole('heading', { level: 2, name: 'Rooms', exact: true })).toBeVisible();
+    await page.goForward();
+    await expect(page.getByRole('heading', { level: 2, name: 'Panels & circuits' })).toBeVisible();
+    await page.goForward();
+    await expect(form).toBeVisible();
+    await expect(form.getByRole('textbox', { name: 'Task', exact: true })).toHaveValue('Keep this draft');
+    expect(state.createdMaintenanceTasks).toEqual([]);
+    await form.getByRole('button', { name: 'Cancel adding task', exact: true }).click();
+    await expect(form).toBeHidden();
+    expect(state.createdMaintenanceTasks).toEqual([]);
+  });
+
   test(`preserves maintenance drafts across sections at ${viewport.width}px`, async ({ page }) => {
     const state = await mockApi(page);
     const writes: string[] = [];
