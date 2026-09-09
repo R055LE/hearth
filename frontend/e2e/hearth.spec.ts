@@ -723,6 +723,92 @@ test('captures and undoes points while preserving circuit-walk defaults', async 
   await expect(page.getByRole('heading', { name: 'Circuit walk' })).not.toBeVisible();
 });
 
+for (const width of [1440, 390]) {
+  test(`provides roomy navigation with keyboard operation at ${width}px`, async ({ page }) => {
+    await mockApi(page);
+    await page.setViewportSize({ width, height: 844 });
+    await page.emulateMedia({ colorScheme: width === 390 ? 'dark' : 'light' });
+    await page.goto('/');
+    const buttons = page.locator('nav button');
+    for (const button of await buttons.all()) {
+      const box = await button.boundingBox();
+      expect(box?.height).toBeGreaterThanOrEqual(44);
+      expect(box?.width).toBeGreaterThanOrEqual(44);
+    }
+    if (width === 390) {
+      const boxes = await buttons.evaluateAll((elements) => elements.map((e) => {
+        const { x, y, width } = e.getBoundingClientRect();
+        return { x, y, width };
+      }));
+      expect(boxes[0].y).toBe(boxes[1].y);
+      expect(boxes[2].y).toBe(boxes[3].y);
+      expect(boxes[0].x).toBe(boxes[2].x);
+      expect(boxes[1].x).toBe(boxes[3].x);
+      expect(boxes[0].width).toBe(boxes[1].width);
+    }
+    await page.keyboard.press('Tab');
+    await expect(buttons.nth(0)).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(buttons.nth(1)).toBeFocused();
+    expect(await buttons.nth(1).evaluate((e) => getComputedStyle(e).outlineStyle)).toBe('solid');
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/#rooms$/);
+    await expect(buttons.nth(1)).toHaveAttribute('aria-current', 'page');
+    await expect(buttons.nth(1)).toBeFocused();
+    expect(await buttons.nth(1).evaluate((e) =>
+      getComputedStyle(e).outlineColor === getComputedStyle(document.body).color,
+    )).toBe(true);
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Space');
+    await expect(page).toHaveURL(/#panels$/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+
+  test(`keeps wall controls separated and usable at ${width}px`, async ({ page }) => {
+    const state = await mockApi(page);
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/#rooms');
+    await page.getByRole('button', { name: 'Edit room geometry for Garage' }).click();
+    await page.getByRole('combobox', { name: 'Wall 1 turn', exact: true }).selectOption('custom');
+    await expect(page.getByRole('spinbutton', { name: 'Wall 1 custom turn degrees' })).toBeVisible();
+    for (const control of await page.locator('.room-builder button, .room-builder input:not([type="radio"]), .room-builder select').all()) {
+      expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    }
+    const placement = page.getByRole('radio', { name: 'Start fresh' });
+    expect(await placement.evaluate((e) => e.closest('label')!.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    if (width === 390) {
+      for (const row of await page.locator('.wall-row').all()) {
+        const remove = await row.getByRole('button').boundingBox();
+        const controlsBottom = await row.locator('input, select').evaluateAll((elements) =>
+          Math.max(...elements.map((e) => e.getBoundingClientRect().bottom)),
+        );
+        expect(remove!.y - controlsBottom).toBeGreaterThanOrEqual(12);
+      }
+    }
+    const direction = page.getByRole('button', { name: 'First wall direction up' });
+    await direction.focus();
+    await page.keyboard.press('Space');
+    await expect(direction).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Remove wall 2', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.wall-row')).toHaveCount(3);
+    expect(state.updatedRoom).toBeNull();
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(state.updatedRoom).toBeNull();
+    await page.getByRole('button', { name: 'Edit room geometry for Garage' }).click();
+    await expect(page.locator('.wall-row')).toHaveCount(4);
+    await page.getByRole('spinbutton', { name: 'Wall 1 feet', exact: true }).fill('12');
+    await page.getByRole('spinbutton', { name: 'Wall 3 feet', exact: true }).fill('12');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.getByRole('button', { name: 'Save room', exact: true }).click();
+    await expect.poll(() => state.updatedRoom).not.toBeNull();
+    expect(state.updatedRoom?.measurement_source).toMatchObject({ walls: [
+      { length_in: 144, turn: 'right' }, { length_in: 120, turn: 'right' },
+      { length_in: 144, turn: 'right' }, { length_in: 120, turn: 'right' },
+    ] });
+  });
+}
+
 test('edits any existing room wall without rewinding later walls', async ({ page }) => {
   const state = await mockApi(page);
   await page.goto('/');

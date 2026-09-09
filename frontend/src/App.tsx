@@ -43,17 +43,30 @@ function App() {
       <header>
         <h1>Hearth</h1>
         <nav className="tabs">
-          <button className={tab === 'floorplan' ? 'active' : ''} onClick={() => openFloorplan()}>
+          <button
+            className={tab === 'floorplan' ? 'active' : ''}
+            aria-current={tab === 'floorplan' ? 'page' : undefined}
+            onClick={() => openFloorplan()}
+          >
             Floorplan
           </button>
-          <button className={tab === 'rooms' ? 'active' : ''} onClick={() => openTab('rooms')}>
+          <button
+            className={tab === 'rooms' ? 'active' : ''}
+            aria-current={tab === 'rooms' ? 'page' : undefined}
+            onClick={() => openTab('rooms')}
+          >
             Rooms
           </button>
-          <button className={tab === 'panels' ? 'active' : ''} onClick={() => openTab('panels')}>
+          <button
+            className={tab === 'panels' ? 'active' : ''}
+            aria-current={tab === 'panels' ? 'page' : undefined}
+            onClick={() => openTab('panels')}
+          >
             Panels &amp; circuits
           </button>
           <button
             className={tab === 'maintenance' ? 'active' : ''}
+            aria-current={tab === 'maintenance' ? 'page' : undefined}
             onClick={() => openTab('maintenance')}
           >
             Maintenance
