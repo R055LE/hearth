@@ -5,15 +5,15 @@ This is dated evidence, not a promise that the image stays empty.
 
 ## Measured baseline
 
-Measured 2026-09-09 from the application image built against Python runtime
-release [`8411e334a764bdff`](https://github.com/R055LE/runtime-images/releases/tag/python-3.14-8411e334a764bdff):
+Measured 2026-09-15 from the application image built against Python runtime
+release [`d9c6793894b54929`](https://github.com/R055LE/runtime-images/releases/tag/python-3.14-d9c6793894b54929):
 
 - runtime digest:
-  `sha256:ad62dab75fdac8d799132ae99585d2d2475065f37a04e7455fa48ed8eb1e376a`
+  `sha256:68ddb601f72a34e1d4c50dbc848945cf71495eda621859a26bbb90fe52d4c5c4`
 - build digest:
-  `sha256:c887c98910222dd0f58e0eb79b0893a604c667c7efcb6069e41f50fadb2e4f0a`
-- runtime packages: 25
-- build packages: 49
+  `sha256:7d20a35e5ed457628e2d5c140ef2f854754b5e5c5ea4c18409e7f1b94cf430d5`
+- runtime packages: 26
+- build packages: 50
 - complete application image: zero HIGH or CRITICAL findings across the Wolfi
   and Python package inventories, scanned with Trivy 0.74.0 and a freshly
   downloaded vulnerability database; the fixable-finding gate also passed
