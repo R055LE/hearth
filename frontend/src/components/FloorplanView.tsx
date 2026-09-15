@@ -95,10 +95,12 @@ function pointAccessibleLabel(point: CircuitPoint): string {
 export function FloorplanView({
   initialCircuitId,
   initialFloor,
+  initialWalking = false,
   onOpenRooms,
 }: {
   initialCircuitId?: number;
   initialFloor?: string;
+  initialWalking?: boolean;
   onOpenRooms: () => void;
 }) {
   const [allRooms, setAllRooms] = useState<Room[]>([]);
@@ -108,9 +110,9 @@ export function FloorplanView({
   const [plan, setPlan] = useState<Floorplan>({ rooms: [], circuit_points: [] });
   const [selectedPointId, setSelectedPointId] = useState<number | null>(null);
   const [selectedCircuitId, setSelectedCircuitId] = useState<number | null>(initialCircuitId ?? null);
-  const [mode, setMode] = useState<InteractionMode>('idle');
+  const [mode, setMode] = useState<InteractionMode>(initialWalking ? 'walk' : 'idle');
   const [draftPoint, setDraftPoint] = useState<PointDraft | null>(null);
-  const [walkCircuitId, setWalkCircuitId] = useState<number | ''>('');
+  const [walkCircuitId, setWalkCircuitId] = useState<number | ''>(initialWalking ? initialCircuitId ?? '' : '');
   const [walkKind, setWalkKind] = useState('outlet');
   const [walkCreatedIds, setWalkCreatedIds] = useState<number[]>([]);
   const [saving, setSaving] = useState(false);
@@ -403,7 +405,14 @@ export function FloorplanView({
 
           {plan.rooms.length === 0 ? (
             <div>
-              <p>Add a room before placing points on the floorplan.</p>
+              {selectedCircuit ? (
+                <>
+                  <p>Add a room before mapping {circuitLabel(selectedCircuit.id)}.</p>
+                  <p>Then return to this breaker and choose Map breaker.</p>
+                </>
+              ) : (
+                <p>Add a room before placing points on the floorplan.</p>
+              )}
               <button type="button" onClick={onOpenRooms}>Add a room</button>
             </div>
           ) : (
@@ -559,7 +568,7 @@ export function FloorplanView({
             <p>Click a point on the floorplan, or a circuit below, to see details.</p>
           ) : null}
 
-          {mode === 'walk' && (
+          {mode === 'walk' && plan.rooms.length > 0 && (
             <div className="info-card walk-controls">
               <h3>Circuit walk</h3>
               <label>

@@ -19,8 +19,10 @@ interface CircuitValues {
 
 export function PanelEditor({
   onViewCircuit,
+  onMapCircuit,
 }: {
   onViewCircuit: (circuitId: number, floor: string) => void;
+  onMapCircuit: (circuitId: number, floor?: string) => void;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -93,6 +95,7 @@ export function PanelEditor({
           circuits={circuits.filter((circuit) => circuit.panel_id === panel.id)}
           circuitPoints={circuitPoints}
           onViewCircuit={viewCircuit}
+          onMapCircuit={onMapCircuit}
           onDeletePanel={() => deletePanel(panel.id)}
           onChange={refresh}
           onError={setError}
@@ -129,6 +132,7 @@ function PanelCard({
   circuits,
   circuitPoints,
   onViewCircuit,
+  onMapCircuit,
   onDeletePanel,
   onChange,
   onError,
@@ -139,6 +143,7 @@ function PanelCard({
   circuits: Circuit[];
   circuitPoints: CircuitPoint[];
   onViewCircuit: (circuitId: number) => void;
+  onMapCircuit: (circuitId: number, floor?: string) => void;
   onDeletePanel: () => void;
   onChange: () => Promise<void>;
   onError: (message: string | null) => void;
@@ -283,6 +288,7 @@ function PanelCard({
               panelName={panel.name}
               mappedPoints={pointCount(circuit.id)}
               onView={() => onViewCircuit(circuit.id)}
+              onMap={() => onMapCircuit(circuit.id, room?.floor ?? rooms[0]?.floor)}
               onSave={(values) => updateCircuit(circuit.id, values)}
               onDelete={() => deleteCircuit(circuit.id)}
               onError={onError}
@@ -322,6 +328,7 @@ function CircuitCard({
   panelName,
   mappedPoints,
   onView,
+  onMap,
   onSave,
   onDelete,
   onError,
@@ -330,6 +337,7 @@ function CircuitCard({
   panelName: string;
   mappedPoints: number;
   onView: () => void;
+  onMap: () => void;
   onSave: (values: CircuitValues) => Promise<boolean>;
   onDelete: () => void;
   onError: (message: string | null) => void;
@@ -387,9 +395,15 @@ function CircuitCard({
             </div>
           </div>
           <div className="breaker-actions">
-            <button type="button" onClick={onView} disabled={mappedPoints === 0}>
-              View breaker {circuit.breaker_label} on floorplan
-            </button>
+            {mappedPoints > 0 ? (
+              <button type="button" onClick={onView}>
+                View breaker {circuit.breaker_label} on floorplan
+              </button>
+            ) : (
+              <button type="button" onClick={onMap}>
+                Map breaker {circuit.breaker_label}
+              </button>
+            )}
             <button
               type="button"
               aria-label={`Edit breaker ${circuit.breaker_label}`}
