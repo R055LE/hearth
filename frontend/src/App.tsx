@@ -20,11 +20,16 @@ function App() {
   const [tab, setTab] = useState<Tab>(tabFromLocation);
   const [floorplanTarget, setFloorplanTarget] = useState<{
     circuitId: number;
-    floor: string;
+    floor?: string;
+    walk?: boolean;
   } | null>(null);
 
   useEffect(() => {
-    const onHashChange = () => setTab(tabFromLocation());
+    const onHashChange = () => {
+      const nextTab = tabFromLocation();
+      setTab(nextTab);
+      if (nextTab !== 'floorplan') setFloorplanTarget(null);
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -35,6 +40,11 @@ function App() {
 
   function openFloorplan(circuitId?: number, floor?: string) {
     setFloorplanTarget(circuitId != null && floor ? { circuitId, floor } : null);
+    openTab('floorplan');
+  }
+
+  function mapCircuit(circuitId: number, floor?: string) {
+    setFloorplanTarget({ circuitId, floor, walk: !!floor });
     openTab('floorplan');
   }
 
@@ -78,11 +88,12 @@ function App() {
           <FloorplanView
             initialCircuitId={floorplanTarget?.circuitId}
             initialFloor={floorplanTarget?.floor}
+            initialWalking={floorplanTarget?.walk}
             onOpenRooms={() => openTab('rooms')}
           />
         )}
         {tab === 'rooms' && <RoomEditor />}
-        {tab === 'panels' && <PanelEditor onViewCircuit={openFloorplan} />}
+        {tab === 'panels' && <PanelEditor onViewCircuit={openFloorplan} onMapCircuit={mapCircuit} />}
         <MaintenanceView active={tab === 'maintenance'} />
       </main>
     </div>

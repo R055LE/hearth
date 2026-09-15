@@ -80,6 +80,14 @@ it. Map padding follows the home's bounds, and phone map height is capped.
 Visible point symbols stay small when selected, with a separate transparent tap
 area so the selection highlight doesn't grow over room labels.
 
+An unmapped breaker opens circuit walk with its circuit ID selected, using the
+panel's floor or the first available room's floor. Leaving Floorplan clears the
+handoff, so Back/Forward doesn't restart a finished walk. With no rooms, the
+floorplan names the breaker and links to room setup; after adding a room, return
+to the breaker to start mapping. Each added point is saved immediately. Cancel
+discards the current point draft, and Finish walk keeps saved points. Mapped
+breakers still open the floor containing their first saved point.
+
 Plain `fetch` + component state — no React Query or Redux. Floorplan rendering is
 hand-rolled SVG (`<polygon>` for rooms, `<circle>` for circuit points), not a
 diagramming library — the interaction surface (click a point, click a breaker,

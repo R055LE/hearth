@@ -144,6 +144,7 @@ async function mockApi(
   options: {
     maintenanceTasks?: MaintenanceTaskFixture[];
     rooms?: (typeof room)[];
+    panels?: { id: number; name: string; room_id: number | null; amperage: number; fed_from_panel_id: number | null }[];
   } = {},
 ): Promise<ApiState> {
   const state: ApiState = {
@@ -163,7 +164,7 @@ async function mockApi(
     completions: task.completions.map((completion) => ({ ...completion })),
   }));
   let storedRooms = (options.rooms ?? [room]).map((storedRoom) => ({ ...storedRoom }));
-  let storedPanels = [{ ...panel }, { ...subpanel }];
+  let storedPanels = (options.panels ?? [panel, subpanel]).map((stored) => ({ ...stored }));
   let storedCircuits = [{ ...circuit }, { ...secondCircuit }, { ...subpanelCircuit }];
   let storedPoints = [{ ...point }];
   let nextRoomId = 2;
@@ -256,11 +257,12 @@ async function mockApi(
       await route.fulfill({ json: storedCircuits });
       return;
     }
-    if (path === '/api/floorplan/main' && method === 'GET') {
+    if (path.startsWith('/api/floorplan/') && method === 'GET') {
+      const floorRooms = storedRooms.filter((storedRoom) => storedRoom.floor === decodeURIComponent(path.slice('/api/floorplan/'.length)));
       await route.fulfill({
         json: {
-          rooms: storedRooms.filter((storedRoom) => storedRoom.floor === 'main'),
-          circuit_points: storedPoints,
+          rooms: floorRooms,
+          circuit_points: storedPoints.filter((storedPoint) => floorRooms.some((floorRoom) => floorRoom.id === storedPoint.room_id)),
         },
       });
       return;
@@ -1001,6 +1003,7 @@ test('makes the floorplan controls keyboard-operable and named', async ({ page }
 
   const addPoint = page.getByRole('button', { name: 'Add point' });
   const pointButton = page.getByRole('button', { name: 'outlet: North wall outlet' });
+  await expect(addPoint).toBeEnabled();
   await addPoint.focus();
   await page.keyboard.press('Tab');
   await page.keyboard.press('Tab');
@@ -1049,8 +1052,8 @@ test('shows panel status and opens mapped breakers on the floorplan', async ({ p
   await expect(unmappedBreaker.getByText('Unmapped', { exact: true })).toBeVisible();
   await expect(unmappedBreaker.getByText('Needs verification', { exact: true })).toBeVisible();
   await expect(
-    unmappedBreaker.getByRole('button', { name: 'View breaker 2 on floorplan' }),
-  ).toBeDisabled();
+    unmappedBreaker.getByRole('button', { name: 'Map breaker 2', exact: true }),
+  ).toBeEnabled();
 
   const mappedBox = await mappedBreaker.boundingBox();
   const unmappedBox = await unmappedBreaker.boundingBox();
@@ -1063,6 +1066,99 @@ test('shows panel status and opens mapped breakers on the floorplan', async ({ p
     'stroke',
     '#f97316',
   );
+});
+
+for (const width of [1440, 390]) {
+  test(`starts mapping the originating panel's breaker at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const state = await mockApi(page);
+    await page.goto('/#panels');
+    const directory = page.getByRole('region', { name: 'Workshop subpanel breaker directory' });
+    await directory.getByRole('button', { name: 'Map breaker 1', exact: true }).click();
+    await expect(page).toHaveURL(/#floorplan$/);
+    const controls = page.locator('.walk-controls');
+    await expect(controls.getByRole('combobox', { name: 'Circuit:', exact: true })).toHaveValue('3');
+    await expect(controls.locator('option:checked')).toHaveText('Workshop subpanel — breaker 1');
+    await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
+    await expect(controls.getByRole('heading', { name: 'Circuit walk' })).toBeInViewport();
+
+    await clickFloorplan(page, 0.6, 0.4);
+    await page.getByLabel('Label:', { exact: true }).fill('Discard this draft');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(state.createdPoints).toEqual([]);
+    await controls.getByRole('button', { name: 'Finish walk', exact: true }).click();
+    expect(state.createdPoints).toEqual([]);
+    await expect(controls).not.toBeVisible();
+
+    await page.getByRole('button', { name: 'Panels & circuits', exact: true }).click();
+    await expect(directory.getByText('Unmapped', { exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(page).toHaveURL(/#floorplan$/);
+    await expect(page.locator('.floorplan-svg')).toBeVisible();
+    await expect(controls).not.toBeVisible();
+    await page.goForward();
+    await expect(page).toHaveURL(/#panels$/);
+    await directory.getByRole('button', { name: 'Map breaker 1', exact: true }).click();
+    await clickFloorplan(page, 0.6, 0.4);
+    await page.getByLabel('Label:', { exact: true }).fill('Bench outlet');
+    await page.locator('.point-form').getByRole('button', { name: 'Add point', exact: true }).click();
+    await expect(page.getByText('1 point added this walk.')).toBeVisible();
+    expect(state.createdPoints).toEqual([expect.objectContaining({ circuit_id: 3, room_id: 1, label: 'Bench outlet' })]);
+    await clickFloorplan(page, 0.5, 0.3);
+    await page.getByLabel('Label:', { exact: true }).fill('Unfinished point');
+    await controls.getByRole('button', { name: 'Finish walk', exact: true }).click();
+    expect(state.createdPoints).toHaveLength(1);
+    expect(state.deletedPointIds).toEqual([]);
+    await expect(page.getByRole('button', { name: 'outlet: Bench outlet', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'outlet: North wall outlet', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Next point', exact: true })).not.toBeVisible();
+
+    await page.getByRole('button', { name: 'Panels & circuits', exact: true }).click();
+    await expect(directory.getByText('1 mapped point', { exact: true })).toBeVisible();
+    await directory.getByRole('button', { name: 'View breaker 1 on floorplan', exact: true }).click();
+    await expect(controls).not.toBeVisible();
+    await expect(page.getByRole('button', { name: /Breaker 1 — Workshop/ })).toHaveClass(/selected/);
+    await page.goBack();
+    await page.goForward();
+    await expect(controls).not.toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+
+  test(`offers room setup before mapping an unmapped breaker at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const state = await mockApi(page, { rooms: [], panels: [{ ...subpanel, room_id: null, fed_from_panel_id: null }] });
+    await page.goto('/#panels');
+    await page.getByRole('region', { name: 'Workshop subpanel breaker directory' })
+      .getByRole('button', { name: 'Map breaker 1', exact: true }).click();
+    await expect(page.getByText('Add a room before mapping Workshop subpanel — breaker 1.')).toBeVisible();
+    await expect(page.getByText('Then return to this breaker and choose Map breaker.')).toBeVisible();
+    await expect(page.locator('.walk-controls')).not.toBeVisible();
+    await page.getByRole('button', { name: 'Add a room', exact: true }).click();
+    await expect(page).toHaveURL(/#rooms$/);
+    await expect(page.getByRole('button', { name: 'Add room', exact: true })).toBeVisible();
+    expect(state.createdPoints).toEqual([]);
+    expect(state.createdRooms).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+}
+
+test('starts mapping on the panel floor and falls back when its location is unset', async ({ page }) => {
+  await mockApi(page, {
+    rooms: [room, { ...room, id: 2, name: 'Upstairs workshop', floor: 'upper' }],
+    panels: [{ ...panel, room_id: null }, { ...subpanel, room_id: 2 }],
+  });
+  await page.goto('/#panels');
+  await page.getByRole('region', { name: 'Workshop subpanel breaker directory' })
+    .getByRole('button', { name: 'Map breaker 1', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('upper');
+  await expect(page.getByRole('combobox', { name: 'Circuit:', exact: true })).toHaveValue('3');
+  await expect(page.locator('.floorplan-svg')).toContainText('Upstairs workshop');
+  await page.getByRole('button', { name: 'Finish walk', exact: true }).click();
+  await page.getByRole('button', { name: 'Panels & circuits', exact: true }).click();
+  await page.getByRole('button', { name: 'Map breaker 2', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
+  await expect(page.getByRole('combobox', { name: 'Circuit:', exact: true })).toHaveValue('2');
+  await expect(page.locator('.floorplan-svg')).toContainText('Garage');
 });
 
 test('edits panels and breakers without saving cancelled drafts', async ({ page }) => {
