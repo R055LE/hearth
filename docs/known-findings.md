@@ -5,13 +5,13 @@ This is dated evidence, not a promise that the image stays empty.
 
 ## Measured baseline
 
-Measured 2026-09-15 from the application image built against Python runtime
-release [`d9c6793894b54929`](https://github.com/R055LE/runtime-images/releases/tag/python-3.14-d9c6793894b54929):
+Measured 2026-09-17 from the application image built against Python runtime
+release [`ecf27b017fa49eca`](https://github.com/R055LE/runtime-images/releases/tag/python-3.14-ecf27b017fa49eca):
 
 - runtime digest:
-  `sha256:68ddb601f72a34e1d4c50dbc848945cf71495eda621859a26bbb90fe52d4c5c4`
+  `sha256:ed159ae3f7c44a8f417524b79c820da1560e97c6669a60124d25278528ea85bf`
 - build digest:
-  `sha256:7d20a35e5ed457628e2d5c140ef2f854754b5e5c5ea4c18409e7f1b94cf430d5`
+  `sha256:0615a16050917fff762914b0b24b9b9191f26439aebdd73cdf90f4e95e7cb445`
 - runtime packages: 26
 - build packages: 50
 - complete application image: zero HIGH or CRITICAL findings across the Wolfi
