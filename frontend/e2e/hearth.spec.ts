@@ -1322,3 +1322,92 @@ test('keeps panel controls contained at phone width', async ({ page }) => {
   ).toHaveText('1 circuit');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
+
+async function selectedContrast(page: Page) {
+  return page.locator('.circuit-list button.selected').evaluate((element) => {
+    const rgb = (value: string) => {
+      const match = /^rgba?\(([^)]+)\)$/.exec(value);
+      if (!match) throw new Error(`unresolved color: ${value}`);
+      const values = match[1].split(',').map(Number);
+      if (values.length === 3) values.push(1);
+      if (values.length !== 4 || values.some((v) => !Number.isFinite(v))) throw new Error('unresolved color');
+      return values;
+    };
+    const canvas = document.createElement('span');
+    canvas.style.color = 'Canvas';
+    document.body.append(canvas);
+    let background = rgb(getComputedStyle(canvas).color).slice(0, 3);
+    canvas.remove();
+    const ancestors: Element[] = [];
+    for (let node: Element | null = element; node; node = node.parentElement) ancestors.unshift(node);
+    for (const node of ancestors) {
+      const style = getComputedStyle(node);
+      if (style.backgroundImage !== 'none' || Number(style.opacity) !== 1 || style.filter !== 'none' || style.mixBlendMode !== 'normal' || style.backdropFilter !== 'none') {
+        throw new Error('background needs visual review');
+      }
+      const color = rgb(style.backgroundColor);
+      background = background.map((channel, i) => color[i] * color[3] + channel * (1 - color[3]));
+    }
+    const style = getComputedStyle(element);
+    const color = rgb(style.color);
+    const foreground = background.map((channel, i) => color[i] * color[3] + channel * (1 - color[3]));
+    const luminance = (channels: number[]) => channels.map((v) => {
+      const c = v / 255;
+      return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4;
+    }).reduce((sum, c, i) => sum + c * [.2126, .7152, .0722][i], 0);
+    const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+    return {ratio: (values[0] + .05) / (values[1] + .05), foreground, background,
+      weight: Number(style.fontWeight), outline: style.outlineStyle, outlineWidth: parseFloat(style.outlineWidth)};
+  });
+}
+
+for (const colorScheme of ['light', 'dark'] as const) {
+  for (const viewport of [{width: 390, height: 844}, {width: 1440, height: 1000}]) {
+    test(`selected breaker contrast ${colorScheme} ${viewport.width}`, async ({page}, testInfo) => {
+      const unexpected: string[] = [];
+      page.on('request', request => {
+        const url = new URL(request.url());
+        if (url.origin !== 'http://127.0.0.1:4173' || request.method() !== 'GET') unexpected.push(url.pathname);
+      });
+      page.on('requestfailed', request => unexpected.push(new URL(request.url()).pathname));
+      page.on('response', response => { if (response.status() >= 400) unexpected.push(new URL(response.url()).pathname); });
+      await mockApi(page);
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({colorScheme});
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      await page.goto('/');
+      const marker = page.getByRole('button', {name: 'outlet: North wall outlet'});
+      await marker.focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByText('Circuit: Main panel — breaker 1', {exact: true})).toBeVisible();
+      const first = page.getByRole('button', {name: /Breaker 1 — Garage/});
+      const second = page.getByRole('button', {name: 'Breaker 2', exact: true});
+      await second.click();
+      await expect(second).toHaveClass(/selected/);
+      await expect(first).not.toHaveClass(/selected/);
+      await first.click();
+      await expect(first).toHaveClass(/selected/);
+      await expect(second).not.toHaveClass(/selected/);
+      await first.scrollIntoViewIfNeeded();
+      const selected = await selectedContrast(page);
+      await page.screenshot({path: testInfo.outputPath('selected.png')});
+      await first.focus();
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Shift+Tab');
+      await expect(first).toBeFocused();
+      await expect(first).toBeInViewport();
+      const focused = await selectedContrast(page);
+      await page.screenshot({path: testInfo.outputPath('focused.png')});
+      await testInfo.attach('contrast', {body: JSON.stringify({selected, focused}), contentType: 'application/json'});
+      expect(selected.ratio).toBeGreaterThanOrEqual(4.5);
+      expect(focused.ratio).toBeGreaterThanOrEqual(4.5);
+      expect(selected.weight).toBeGreaterThanOrEqual(600);
+      expect(focused.outline).not.toBe('none');
+      expect(focused.outlineWidth).toBeGreaterThan(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(errors).toEqual([]);
+      expect(unexpected).toEqual([]);
+    });
+  }
+}
