@@ -9,40 +9,71 @@ issuer="https://token.actions.githubusercontent.com"
 spdx_predicate="https://spdx.dev/Document"
 verify_dir=$(mktemp -d)
 trap 'rm -rf "$verify_dir"' EXIT
+stage_err="$verify_dir/stage.err"
+
+fail_stage() {
+    local stage=$1 detail=$2
+    printf 'runtime image verification failed: %s' "$stage" >&2
+    if [ -n "$detail" ]; then
+        printf ' (%s)' "$detail" >&2
+    fi
+    printf '\n' >&2
+    if [ -s "$stage_err" ]; then
+        sed 's/^/  /' "$stage_err" >&2
+    fi
+    exit 1
+}
+
+run_stage() {
+    local stage=$1 detail=$2
+    shift 2
+    : >"$stage_err"
+    if ! "$@" 2>"$stage_err"; then
+        fail_stage "$stage" "$detail"
+    fi
+}
 
 references=$(python3 "${repo_root}/scripts/runtime_image_refs.py" \
     --dockerfile "${repo_root}/Dockerfile")
 python_version=$(jq -r .python <<<"$references")
 release_prefix="python-${python_version}-"
 
-gh release list --repo "$release_repo" --limit 100 --json tagName \
+run_stage "release lookup" "repo ${release_repo}, prefix ${release_prefix}" \
+    gh release list --repo "$release_repo" --limit 100 --json tagName \
     >"${verify_dir}/releases.json"
-release_tag=$(jq -r --arg prefix "$release_prefix" \
-    '[.[] | select(.tagName | startswith($prefix))][0].tagName // empty' \
-    "${verify_dir}/releases.json")
+release_tag=$(run_stage "release lookup" \
+    "repo ${release_repo}, prefix ${release_prefix}" \
+    jq -r --arg prefix "$release_prefix" \
+        '[.[] | select(.tagName | startswith($prefix))][0].tagName // empty' \
+        "${verify_dir}/releases.json")
 [ -n "$release_tag" ] || {
-    echo "runtime image verification failed: no ${release_prefix} release" >&2
+    echo "runtime image verification failed: no ${release_prefix} release in ${release_repo}" >&2
     exit 1
 }
 
-gh release download "$release_tag" \
+run_stage "release download" "release ${release_tag}" \
+    gh release download "$release_tag" \
     --repo "$release_repo" \
     --pattern release-manifest.json \
     --dir "$verify_dir"
-references=$(python3 "${repo_root}/scripts/runtime_image_refs.py" \
-    --dockerfile "${repo_root}/Dockerfile" \
-    --manifest "${verify_dir}/release-manifest.json")
+references=$(run_stage "manifest validation" "release ${release_tag}" \
+    python3 "${repo_root}/scripts/runtime_image_refs.py" \
+        --dockerfile "${repo_root}/Dockerfile" \
+        --manifest "${verify_dir}/release-manifest.json")
 
 for variant in runtime build; do
     ref=$(jq -r ".${variant}_ref" <<<"$references")
-    cosign verify \
+    run_stage "signature verification" "image ${ref}" \
+        cosign verify \
         --certificate-identity "$identity" \
         --certificate-oidc-issuer "$issuer" \
         "$ref" >/dev/null
-    gh attestation verify "oci://${ref}" \
+    run_stage "provenance attestation verification" "image ${ref}" \
+        gh attestation verify "oci://${ref}" \
         --repo "$release_repo" \
         --signer-workflow "$signer_workflow" >/dev/null
-    gh attestation verify "oci://${ref}" \
+    run_stage "SPDX attestation verification" "image ${ref}" \
+        gh attestation verify "oci://${ref}" \
         --repo "$release_repo" \
         --signer-workflow "$signer_workflow" \
         --predicate-type "$spdx_predicate" >/dev/null
