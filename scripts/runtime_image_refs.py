@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -120,7 +121,7 @@ def main() -> int:
                     if value:
                         stream.write(f"{key}={value}\n")
     except (OSError, json.JSONDecodeError, ReferenceError) as exc:
-        print(f"runtime image reference check failed: {exc}")
+        print(f"runtime image reference check failed: {exc}", file=sys.stderr)
         return 1
     return 0
 
