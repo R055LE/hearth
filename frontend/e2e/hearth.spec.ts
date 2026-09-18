@@ -1250,6 +1250,7 @@ test('keeps room creation hidden until requested and collapses it after cancel o
   await expect(page.locator('form')).toHaveCount(0);
 
   await addRoom.click();
+  await page.getByRole('radio', { name: /Walk the walls/ }).check();
   await page.getByRole('textbox', { name: 'Name:' }).fill('Storage');
   const wallFeet = page.getByPlaceholder('ft');
   for (let wall = 0; wall < 4; wall += 1) {
@@ -1263,6 +1264,72 @@ test('keeps room creation hidden until requested and collapses it after cancel o
   await expect(page.locator('form')).toHaveCount(0);
   await expect(addRoom).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('creates a rectangular room from length and width without wall entry', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#rooms');
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+
+  // Rectangle is the default common path; Cancel still makes no API write.
+  await expect(page.getByRole('radio', { name: /Rectangle \(length and width\)/ })).toBeChecked();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect(state.createdRooms).toEqual([]);
+
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Name:' }).fill('Kitchen');
+  await page.getByRole('spinbutton', { name: 'Rectangle length in feet' }).fill('12');
+  await page.getByRole('spinbutton', { name: 'Rectangle width in feet' }).fill('10');
+
+  const preview = page.locator('.room-builder .floorplan-svg');
+  const addRoomHeading = page.getByRole('heading', { name: 'Add room' });
+  const createRoom = page.getByRole('button', { name: 'Create room', exact: true });
+  await expect(preview).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  const [headingBox, previewBox, createBox] = await Promise.all([
+    addRoomHeading.boundingBox(),
+    preview.boundingBox(),
+    createRoom.boundingBox(),
+  ]);
+  expect(headingBox).not.toBeNull();
+  expect(previewBox).not.toBeNull();
+  expect(createBox).not.toBeNull();
+  expect(previewBox!.height).toBeGreaterThanOrEqual(200);
+  expect(createBox!.y + createBox!.height - headingBox!.y).toBeLessThanOrEqual(844);
+  await createRoom.click();
+
+  await expect.poll(() => state.createdRooms).toHaveLength(1);
+  expect(state.createdRooms[0]).toMatchObject({
+    name: 'Kitchen',
+    floor: 'main',
+    polygon: [
+      [0, 0],
+      [12, 0],
+      [12, 10],
+      [0, 10],
+    ],
+  });
+  expect(state.createdRooms[0].measurement_source).toMatchObject({
+    unit: 'ft_in',
+    start: { mode: 'absolute', x: 0, y: 0, heading_deg: 0 },
+    walls: [
+      { length_in: 144, turn: 'right' },
+      { length_in: 120, turn: 'right' },
+      { length_in: 144, turn: 'right' },
+      { length_in: 120, turn: 'right' },
+    ],
+  });
+  await expect(page.getByRole('cell', { name: 'Kitchen', exact: true })).toBeVisible();
+
+  // The measured wall-walk path stays available, with ordinary-language guidance.
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  await page.getByRole('radio', { name: /Walk the walls/ }).check();
+  await expect(page.getByRole('group', { name: 'Walls' })).toBeVisible();
+  await expect(
+    page.getByText('walk the first wall in the chosen direction'),
+  ).toBeVisible();
+  await expect(page.getByRole('spinbutton', { name: 'New wall feet' })).toBeVisible();
 });
 
 test('requires confirmation before deleting a point', async ({ page }) => {

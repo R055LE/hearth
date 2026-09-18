@@ -364,6 +364,37 @@
   margin-bottom: 1rem;
 }
 
+.room-builder .room-basics {
+  margin-bottom: 0.75rem;
+}
+
+.room-builder .room-basics.editing {
+  display: block;
+}
+
+.room-builder .shape-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.room-builder .rectangle-dimensions {
+  margin-top: 0.5rem;
+}
+
+.room-placement > summary {
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.room-placement.required > summary {
+  display: none;
+}
+
+.room-placement > fieldset {
+  margin-top: 0.5rem;
+}
+
 .room-builder .stacked-form > label,
 .room-builder fieldset > label {
   display: flex;
@@ -577,6 +608,16 @@
   .floorplan-svg {
     min-height: 360px;
     height: 55vh;
+  }
+
+  .room-builder .room-basics,
+  .room-builder .rectangle-dimensions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .room-builder-preview .floorplan-svg {
+    min-height: 220px;
+    height: 28svh;
   }
 
   .floorplan-main .floorplan-svg {
