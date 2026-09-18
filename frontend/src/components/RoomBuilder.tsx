@@ -23,6 +23,7 @@ function roomWalls(room: Room): { from: [number, number]; to: [number, number] }
 interface FormState {
   name: string;
   floor: string;
+  shapeMode: 'rectangle' | 'walls';
   placementMode: 'fresh' | 'anchor';
   start: StartPoint;
   anchorRoomId: number | '';
@@ -38,6 +39,9 @@ function initialFormState(editingRoom: Room | null, allRooms: Room[]): FormState
   const base: FormState = {
     name: '',
     floor: 'main',
+    // Rectangle entry is the common path for new rooms; editing always walks walls because
+    // the shape is already fixed and must not be silently re-derived from length × width.
+    shapeMode: editingRoom ? 'walls' : 'rectangle',
     placementMode: 'fresh',
     start: { x: 0, y: 0, heading_deg: 0 },
     anchorRoomId: '',
@@ -104,6 +108,9 @@ export function RoomBuilder({
   const initial = initialFormState(editingRoom, allRooms);
   const [name, setName] = useState(initial.name);
   const [floor, setFloor] = useState(initial.floor);
+  const [shapeMode, setShapeMode] = useState<'rectangle' | 'walls'>(initial.shapeMode);
+  const [rectLengthFt, setRectLengthFt] = useState('');
+  const [rectWidthFt, setRectWidthFt] = useState('');
   const [placementMode, setPlacementMode] = useState<'fresh' | 'anchor'>(initial.placementMode);
   const [start, setStart] = useState<StartPoint>(initial.start);
   const [anchorRoomId, setAnchorRoomId] = useState<number | ''>(initial.anchorRoomId);
@@ -111,7 +118,7 @@ export function RoomBuilder({
   const [anchorCorner, setAnchorCorner] = useState<'start' | 'end'>(initial.anchorCorner);
   const [anchorOffsetIn, setAnchorOffsetIn] = useState(initial.anchorOffsetIn);
   const [anchorHeadingDeg, setAnchorHeadingDeg] = useState(initial.anchorHeadingDeg);
-  const [walls, setWalls] = useState<Wall[]>(initial.walls);
+  const [walkedWalls, setWalkedWalls] = useState<Wall[]>(initial.walls);
   const [draftFeet, setDraftFeet] = useState('');
   const [draftInches, setDraftInches] = useState('');
   const [draftTurn, setDraftTurn] = useState<'left' | 'right' | 'straight' | 'custom'>('right');
@@ -122,6 +129,22 @@ export function RoomBuilder({
   // happens once (see the useState initializers above).
   const [staleAnchorNotice] = useState(initial.staleAnchorNotice);
   const [circuitPointCount, setCircuitPointCount] = useState(0);
+
+  // Rectangle mode uses the same four-wall representation as the measured path, so saved
+  // geometry round-trips through Edit geometry.
+  const rectWalls = useMemo<Wall[] | null>(() => {
+    const lengthFt = Number(rectLengthFt);
+    const widthFt = Number(rectWidthFt);
+    if (!Number.isFinite(lengthFt) || !Number.isFinite(widthFt) || lengthFt <= 0 || widthFt <= 0) {
+      return null;
+    }
+    const side = (ft: number): Wall => ({ length_in: ft * 12, turn: 'right' });
+    return [side(lengthFt), side(widthFt), side(lengthFt), side(widthFt)];
+  }, [rectLengthFt, rectWidthFt]);
+  const walls = useMemo<Wall[]>(
+    () => (shapeMode === 'rectangle' ? (rectWalls ?? []) : walkedWalls),
+    [shapeMode, rectWalls, walkedWalls],
+  );
 
   useEffect(() => {
     if (!editingRoom) return;
@@ -213,19 +236,19 @@ export function RoomBuilder({
       return;
     }
     const turn: Turn = draftTurn === 'custom' ? { deg: Number(draftCustomDeg) || 0 } : draftTurn;
-    setWalls((w) => [...w, { length_in, turn }]);
+    setWalkedWalls((w) => [...w, { length_in, turn }]);
     setDraftFeet('');
     setDraftInches('');
     setError(null);
   }
 
   function undoLastWall() {
-    setWalls((w) => w.slice(0, -1));
+    setWalkedWalls((w) => w.slice(0, -1));
   }
 
   function updateWallLength(index: number, part: 'feet' | 'inches', value: number) {
     if (!Number.isFinite(value) || value < 0) return;
-    setWalls((current) =>
+    setWalkedWalls((current) =>
       current.map((wall, wallIndex) => {
         if (wallIndex !== index) return wall;
         const feet = Math.floor(wall.length_in / 12);
@@ -239,7 +262,7 @@ export function RoomBuilder({
   }
 
   function updateWallTurn(index: number, value: 'left' | 'right' | 'straight' | 'custom') {
-    setWalls((current) =>
+    setWalkedWalls((current) =>
       current.map((wall, wallIndex) => {
         if (wallIndex !== index) return wall;
         if (value !== 'custom') return { ...wall, turn: value };
@@ -250,7 +273,7 @@ export function RoomBuilder({
 
   function updateCustomTurn(index: number, value: number) {
     if (!Number.isFinite(value)) return;
-    setWalls((current) =>
+    setWalkedWalls((current) =>
       current.map((wall, wallIndex) =>
         wallIndex === index ? { ...wall, turn: { deg: value } } : wall,
       ),
@@ -258,7 +281,7 @@ export function RoomBuilder({
   }
 
   function removeWall(index: number) {
-    setWalls((current) => current.filter((_, wallIndex) => wallIndex !== index));
+    setWalkedWalls((current) => current.filter((_, wallIndex) => wallIndex !== index));
   }
 
   async function submit(e: React.FormEvent) {
@@ -298,7 +321,9 @@ export function RoomBuilder({
       return;
     }
     setName('');
-    setWalls([]);
+    setWalkedWalls([]);
+    setRectLengthFt('');
+    setRectWidthFt('');
     setError(null);
     onSaved();
   }
@@ -306,12 +331,14 @@ export function RoomBuilder({
   return (
     <div className="room-builder">
       <form id={formId} className="stacked-form" onSubmit={submit}>
-        <label>
-          Name: <input value={name} onChange={(e) => setName(e.target.value)} required />
-        </label>
-        <label>
-          Floor: <input value={floor} onChange={(e) => setFloor(e.target.value)} required />
-        </label>
+        <div className={`field-grid room-basics${editingRoom ? ' editing' : ''}`}>
+          <label>
+            Name: <input value={name} onChange={(e) => setName(e.target.value)} required />
+          </label>
+          <label>
+            Floor: <input value={floor} onChange={(e) => setFloor(e.target.value)} required />
+          </label>
+        </div>
 
         {circuitPointCount > 0 && (
           <p>
@@ -320,114 +347,180 @@ export function RoomBuilder({
           </p>
         )}
 
-        <fieldset>
-          <legend>Placement</legend>
-          <label>
-            <input type="radio" checked={placementMode === 'fresh'} onChange={() => setPlacementMode('fresh')} />
-            Start fresh
-          </label>
-          {anchorableRooms.length > 0 && (
+        {!editingRoom && (
+          <fieldset className="room-shape">
+            <legend>Shape</legend>
+            <div className="shape-options">
+              <label>
+                <input
+                  type="radio"
+                  checked={shapeMode === 'rectangle'}
+                  onChange={() => setShapeMode('rectangle')}
+                />
+                Rectangle (length and width)
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  checked={shapeMode === 'walls'}
+                  onChange={() => setShapeMode('walls')}
+                />
+                Walk the walls (irregular shapes)
+              </label>
+            </div>
+            {shapeMode === 'rectangle' && (
+              <div className="field-grid rectangle-dimensions">
+                <label>
+                  Length (ft):{' '}
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    aria-label="Rectangle length in feet"
+                    value={rectLengthFt}
+                    onChange={(e) => setRectLengthFt(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Width (ft):{' '}
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    aria-label="Rectangle width in feet"
+                    value={rectWidthFt}
+                    onChange={(e) => setRectWidthFt(e.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+          </fieldset>
+        )}
+
+        <details
+          className={`room-placement${editingRoom || shapeMode === 'walls' ? ' required' : ''}`}
+          open={editingRoom || shapeMode === 'walls' ? true : undefined}
+        >
+          <summary>Position and direction (optional)</summary>
+          <fieldset>
+            <legend>Placement</legend>
             <label>
               <input
                 type="radio"
-                checked={placementMode === 'anchor'}
-                onChange={() => setPlacementMode('anchor')}
+                checked={placementMode === 'fresh'}
+                onChange={() => setPlacementMode('fresh')}
               />
-              Attach to existing room
+              Start fresh
             </label>
-          )}
+            {anchorableRooms.length > 0 && (
+              <label>
+                <input
+                  type="radio"
+                  checked={placementMode === 'anchor'}
+                  onChange={() => setPlacementMode('anchor')}
+                />
+                Attach to existing room
+              </label>
+            )}
 
-          {placementMode === 'fresh' ? (
-            <>
-              <label>
-                X (ft):{' '}
-                <input
-                  type="number"
-                  value={start.x}
-                  onChange={(e) => setStart((s) => ({ ...s, x: Number(e.target.value) }))}
-                />
-              </label>
-              <label>
-                Y (ft):{' '}
-                <input
-                  type="number"
-                  value={start.y}
-                  onChange={(e) => setStart((s) => ({ ...s, y: Number(e.target.value) }))}
-                />
-              </label>
-              <div className="heading-buttons">
-                {HEADINGS.map((h) => (
-                  <button
-                    key={h.deg}
-                    type="button"
-                    className={start.heading_deg === h.deg ? 'active' : ''}
-                    aria-label={`First wall direction ${h.direction}`}
-                    aria-pressed={start.heading_deg === h.deg}
-                    onClick={() => setStart((s) => ({ ...s, heading_deg: h.deg }))}
-                  >
-                    {h.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <>
-              <label>
-                Room:{' '}
-                <select value={anchorRoomId} onChange={(e) => setAnchorRoomId(Number(e.target.value))}>
-                  <option value="" disabled>
-                    Select a room
-                  </option>
-                  {anchorableRooms.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {anchorRoom && (
+            {placementMode === 'fresh' ? (
+              <>
                 <label>
-                  Wall:{' '}
-                  <select value={anchorWallIndex} onChange={(e) => setAnchorWallIndex(Number(e.target.value))}>
-                    {anchorWalls.map((w, i) => (
-                      <option key={i} value={i}>
-                        Wall {i + 1}: ({w.from[0]}, {w.from[1]}) → ({w.to[0]}, {w.to[1]})
+                  X (ft):{' '}
+                  <input
+                    type="number"
+                    value={start.x}
+                    onChange={(e) => setStart((s) => ({ ...s, x: Number(e.target.value) }))}
+                  />
+                </label>
+                <label>
+                  Y (ft):{' '}
+                  <input
+                    type="number"
+                    value={start.y}
+                    onChange={(e) => setStart((s) => ({ ...s, y: Number(e.target.value) }))}
+                  />
+                </label>
+                <div className="heading-buttons">
+                  {HEADINGS.map((h) => (
+                    <button
+                      key={h.deg}
+                      type="button"
+                      className={start.heading_deg === h.deg ? 'active' : ''}
+                      aria-label={`First wall direction ${h.direction}`}
+                      aria-pressed={start.heading_deg === h.deg}
+                      onClick={() => setStart((s) => ({ ...s, heading_deg: h.deg }))}
+                    >
+                      {h.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <label>
+                  Room:{' '}
+                  <select value={anchorRoomId} onChange={(e) => setAnchorRoomId(Number(e.target.value))}>
+                    <option value="" disabled>
+                      Select a room
+                    </option>
+                    {anchorableRooms.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
                       </option>
                     ))}
                   </select>
                 </label>
-              )}
-              <label>
-                Corner:{' '}
-                <select value={anchorCorner} onChange={(e) => setAnchorCorner(e.target.value as 'start' | 'end')}>
-                  <option value="start">Wall start</option>
-                  <option value="end">Wall end</option>
-                </select>
-              </label>
-              <label>
-                Offset (in):{' '}
-                <input type="number" value={anchorOffsetIn} onChange={(e) => setAnchorOffsetIn(e.target.value)} />
-              </label>
-              <div className="heading-buttons">
-                {HEADINGS.map((h) => (
-                  <button
-                    key={h.deg}
-                    type="button"
-                    className={anchorHeadingDeg === h.deg ? 'active' : ''}
-                    aria-label={`First wall direction ${h.direction}`}
-                    aria-pressed={anchorHeadingDeg === h.deg}
-                    onClick={() => setAnchorHeadingDeg(h.deg)}
-                  >
-                    {h.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </fieldset>
+                {anchorRoom && (
+                  <label>
+                    Wall:{' '}
+                    <select value={anchorWallIndex} onChange={(e) => setAnchorWallIndex(Number(e.target.value))}>
+                      {anchorWalls.map((w, i) => (
+                        <option key={i} value={i}>
+                          Wall {i + 1}: ({w.from[0]}, {w.from[1]}) → ({w.to[0]}, {w.to[1]})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label>
+                  Corner:{' '}
+                  <select value={anchorCorner} onChange={(e) => setAnchorCorner(e.target.value as 'start' | 'end')}>
+                    <option value="start">Wall start</option>
+                    <option value="end">Wall end</option>
+                  </select>
+                </label>
+                <label>
+                  Offset (in):{' '}
+                  <input type="number" value={anchorOffsetIn} onChange={(e) => setAnchorOffsetIn(e.target.value)} />
+                </label>
+                <div className="heading-buttons">
+                  {HEADINGS.map((h) => (
+                    <button
+                      key={h.deg}
+                      type="button"
+                      className={anchorHeadingDeg === h.deg ? 'active' : ''}
+                      aria-label={`First wall direction ${h.direction}`}
+                      aria-pressed={anchorHeadingDeg === h.deg}
+                      onClick={() => setAnchorHeadingDeg(h.deg)}
+                    >
+                      {h.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </fieldset>
+        </details>
 
-        <fieldset>
-          <legend>Walls</legend>
+        {shapeMode === 'walls' && (
+          <fieldset>
+            <legend>Walls</legend>
+            <p>
+              Start at the placement point and walk the first wall in the chosen direction. After each wall the draft
+              turns right by default. Change any turn with its dropdown. The shape closes when the last wall ends back
+              where the walk started.
+            </p>
           <ul className="wall-list">
             {walls.map((w, i) => (
               <li key={i} className="wall-row">
@@ -532,7 +625,8 @@ export function RoomBuilder({
                 ? `Gap: ${(gap * 12).toFixed(1)}in`
                 : 'Add at least 3 walls'}
           </p>
-        </fieldset>
+          </fieldset>
+        )}
 
         {staleAnchorNotice && (
           <p className="error">Original anchor room was deleted — placement reset to its last known position.</p>
