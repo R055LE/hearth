@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -75,3 +77,47 @@ def test_manifest_digest_mismatch_fails() -> None:
     pair = parse_dockerfile(dockerfile())
     with pytest.raises(ReferenceError, match="runtime digest"):
         validate_manifest(pair, manifest("sha256:" + "d" * 64))
+
+
+def run_cli(*cli_args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603
+        [sys.executable, str(REPO_ROOT / "scripts" / "runtime_image_refs.py"), *cli_args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_cli_success_prints_json_to_stdout(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest()))
+    dockerfile_path = tmp_path / "Dockerfile"
+    dockerfile_path.write_text(dockerfile())
+    result = run_cli("--dockerfile", str(dockerfile_path), "--manifest", str(manifest_path))
+    assert result.returncode == 0
+    assert result.stderr == ""
+    output = json.loads(result.stdout)
+    assert output["python"] == "3.14"
+    assert output["release_id"] == "0123456789abcdef"
+
+
+def test_cli_failure_writes_diagnostic_to_stderr_and_exits_nonzero(tmp_path: Path) -> None:
+    dockerfile_path = tmp_path / "Dockerfile"
+    dockerfile_path.write_text(dockerfile())
+    result = run_cli(
+        "--dockerfile", str(dockerfile_path), "--manifest", str(tmp_path / "missing.json")
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "runtime image reference check failed:" in result.stderr
+
+
+def test_cli_manifest_mismatch_reports_diagnostic(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest("sha256:" + "d" * 64)))
+    dockerfile_path = tmp_path / "Dockerfile"
+    dockerfile_path.write_text(dockerfile())
+    result = run_cli("--dockerfile", str(dockerfile_path), "--manifest", str(manifest_path))
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "runtime digest does not match the latest release" in result.stderr
