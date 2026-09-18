@@ -29,6 +29,7 @@ def test_create_list_and_update_maintenance_task(client):
         "recurrence_days": 90,
         "notes": "Use the 16x25x1 filters.",
         "is_active": True,
+        "retired": False,
         "completions": [],
     }
 
@@ -113,6 +114,95 @@ def test_completing_one_time_task_closes_it_and_rejects_duplicate_completion(cli
     )
     assert response.status_code == 409
     assert response.json()["detail"] == "Maintenance task is already closed"
+
+
+def test_retire_and_restore_recurring_task_preserves_history(client):
+    task = client.post(
+        "/maintenance-tasks",
+        json={"title": "Service sump pump", "due_date": "2026-08-01", "recurrence_days": 180},
+    ).json()
+    client.post(
+        f"/maintenance-tasks/{task['id']}/completions",
+        json={"completed_on": "2026-08-05"},
+    )
+
+    response = client.post(f"/maintenance-tasks/{task['id']}/retire")
+    assert response.status_code == 200
+    retired = response.json()
+    assert retired["retired"] is True
+    assert retired["is_active"] is True
+    assert retired["recurrence_days"] == 180
+    assert retired["due_date"] == "2027-02-01"
+    assert len(retired["completions"]) == 1
+
+    # Retirement itself must not record a completion.
+    tasks = client.get("/maintenance-tasks").json()
+    assert tasks[0]["retired"] is True
+    assert len(tasks[0]["completions"]) == 1
+
+    response = client.post(
+        f"/maintenance-tasks/{task['id']}/completions",
+        json={"completed_on": "2026-09-10"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Maintenance task is retired"
+
+    response = client.post(
+        f"/maintenance-tasks/{task['id']}/restore",
+        json={"next_due_date": "2027-03-01"},
+    )
+    assert response.status_code == 200
+    restored = response.json()
+    assert restored["retired"] is False
+    assert restored["due_date"] == "2027-03-01"
+    assert restored["recurrence_days"] == 180
+    assert len(restored["completions"]) == 1
+
+    response = client.post(
+        f"/maintenance-tasks/{task['id']}/completions",
+        json={"completed_on": "2027-03-05"},
+    )
+    assert response.status_code == 201
+    completed = response.json()
+    assert completed["due_date"] == "2027-09-01"
+    assert len(completed["completions"]) == 2
+
+
+def test_retire_rejects_one_off_closed_and_double_retire(client):
+    one_off = client.post(
+        "/maintenance-tasks",
+        json={"title": "Seal the deck", "due_date": "2026-08-25"},
+    ).json()
+
+    response = client.post(f"/maintenance-tasks/{one_off['id']}/retire")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Only recurring tasks can be retired"
+
+    recurring = client.post(
+        "/maintenance-tasks",
+        json={"title": "Clean gutters", "due_date": "2026-09-01", "recurrence_days": 90},
+    ).json()
+    client.post(f"/maintenance-tasks/{recurring['id']}/retire")
+    response = client.post(f"/maintenance-tasks/{recurring['id']}/retire")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Maintenance task is already retired"
+
+
+def test_restore_rejects_active_task_and_requires_next_due_date(client):
+    recurring = client.post(
+        "/maintenance-tasks",
+        json={"title": "Clean gutters", "due_date": "2026-09-01", "recurrence_days": 90},
+    ).json()
+
+    response = client.post(
+        f"/maintenance-tasks/{recurring['id']}/restore",
+        json={"next_due_date": "2026-12-01"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Maintenance task is not retired"
+
+    response = client.post(f"/maintenance-tasks/{recurring['id']}/restore", json={})
+    assert response.status_code == 422
 
 
 def test_deleting_room_keeps_maintenance_task(client):

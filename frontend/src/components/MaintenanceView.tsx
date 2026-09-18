@@ -19,6 +19,7 @@ function localDate(): string {
 }
 
 function groupFor(task: MaintenanceTask, today: string) {
+  if (task.retired) return 'retired';
   if (!task.is_active) return 'completed';
   if (task.due_date < today) return 'overdue';
   if (task.due_date === today) return 'today';
@@ -30,6 +31,7 @@ const GROUPS = [
   { key: 'today', label: 'Due today' },
   { key: 'upcoming', label: 'Upcoming' },
   { key: 'completed', label: 'Completed' },
+  { key: 'retired', label: 'Retired' },
 ] as const;
 
 export function MaintenanceView({ active }: { active: boolean }) {
@@ -147,6 +149,8 @@ function TaskCard({
 }) {
   const [editing, setEditing] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [retiring, setRetiring] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const headingId = `maintenance-task-${task.id}`;
   const room = rooms.find((candidate) => candidate.id === task.room_id);
 
@@ -176,6 +180,32 @@ function TaskCard({
     }
   }
 
+  async function retireTask() {
+    try {
+      await api.maintenanceTasks.retire(task.id);
+      setRetiring(false);
+      onError(null);
+      await onChange();
+      return true;
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }
+
+  async function restoreTask(nextDueDate: string) {
+    try {
+      await api.maintenanceTasks.restore(task.id, nextDueDate);
+      setRestoring(false);
+      onError(null);
+      await onChange();
+      return true;
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }
+
   return (
     <article className="maintenance-card" aria-labelledby={headingId}>
       <header className="maintenance-card-header">
@@ -190,7 +220,7 @@ function TaskCard({
           ariaLabel={`Edit ${task.title}`}
           initial={task}
           rooms={rooms}
-          scheduleLocked={!task.is_active}
+          scheduleLocked={!task.is_active || task.retired}
           submitLabel="Save task"
           cancelLabel="Cancel task edit"
           onSave={updateTask}
@@ -199,20 +229,44 @@ function TaskCard({
       ) : (
         <>
           <div className="maintenance-meta">
-            <span>{task.is_active ? `Next due ${task.due_date}` : `Last due ${task.due_date}`}</span>
+            <span>
+              {task.retired
+                ? `Retired, was due ${task.due_date}`
+                : task.is_active
+                  ? `Next due ${task.due_date}`
+                  : `Last due ${task.due_date}`}
+            </span>
             <span>{room?.name ?? 'No room'}</span>
             <span>{task.recurrence_days ? `Every ${task.recurrence_days} days` : 'One time'}</span>
           </div>
           {task.notes && <p>{task.notes}</p>}
-          {!completing && (
+          {!completing && !retiring && !restoring && (
             <div className="form-actions">
-              {task.is_active && (
+              {task.is_active && !task.retired && (
                 <button
                   type="button"
                   aria-label={`Complete ${task.title}`}
                   onClick={() => setCompleting(true)}
                 >
                   Complete
+                </button>
+              )}
+              {task.is_active && !task.retired && task.recurrence_days != null && (
+                <button
+                  type="button"
+                  aria-label={`Retire ${task.title}`}
+                  onClick={() => setRetiring(true)}
+                >
+                  Retire
+                </button>
+              )}
+              {task.retired && (
+                <button
+                  type="button"
+                  aria-label={`Restore ${task.title}`}
+                  onClick={() => setRestoring(true)}
+                >
+                  Restore
                 </button>
               )}
               <button
@@ -230,6 +284,12 @@ function TaskCard({
               onSave={completeTask}
               onCancel={() => setCompleting(false)}
             />
+          )}
+          {retiring && (
+            <RetireForm task={task} onSave={retireTask} onCancel={() => setRetiring(false)} />
+          )}
+          {restoring && (
+            <RestoreForm task={task} onSave={restoreTask} onCancel={() => setRestoring(false)} />
           )}
           {task.completions.length > 0 && (
             <details className="maintenance-history" open={!task.is_active}>
@@ -388,6 +448,81 @@ function CompletionForm({
       <div className="form-actions">
         <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save completion'}</button>
         <button type="button" onClick={onCancel}>Cancel completion</button>
+      </div>
+    </form>
+  );
+}
+
+function RetireForm({
+  task,
+  onSave,
+  onCancel,
+}: {
+  task: MaintenanceTask;
+  onSave: () => Promise<boolean>;
+  onCancel: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    const saved = await onSave();
+    if (!saved) setSaving(false);
+  }
+
+  return (
+    <form
+      className="editor-form lifecycle-form"
+      aria-label={`Retire ${task.title}`}
+      onSubmit={submit}
+    >
+      <p>Retire this recurring task? Its details and completion history will be kept.</p>
+      <div className="form-actions">
+        <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Retire task'}</button>
+        <button type="button" onClick={onCancel}>Cancel retirement</button>
+      </div>
+    </form>
+  );
+}
+
+function RestoreForm({
+  task,
+  onSave,
+  onCancel,
+}: {
+  task: MaintenanceTask;
+  onSave: (nextDueDate: string) => Promise<boolean>;
+  onCancel: () => void;
+}) {
+  const [nextDueDate, setNextDueDate] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    const saved = await onSave(nextDueDate);
+    if (!saved) setSaving(false);
+  }
+
+  return (
+    <form
+      className="editor-form lifecycle-form"
+      aria-label={`Restore ${task.title}`}
+      onSubmit={submit}
+    >
+      <label>
+        Next due date
+        <input
+          type="date"
+          value={nextDueDate}
+          onChange={(event) => setNextDueDate(event.target.value)}
+          required
+        />
+      </label>
+      <div className="form-actions">
+        <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Restore task'}</button>
+        <button type="button" onClick={onCancel}>Cancel restoration</button>
       </div>
     </form>
   );

@@ -197,7 +197,12 @@ class MaintenanceTaskRead(MaintenanceTaskBase):
 
     id: int
     is_active: bool
+    retired: bool
     completions: list[MaintenanceCompletionRead]
+
+
+class MaintenanceRestore(BaseModel):
+    next_due_date: date
 
 
 class FloorplanResponse(BaseModel):

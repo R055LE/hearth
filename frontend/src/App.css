@@ -539,17 +539,24 @@
 }
 
 .maintenance-form textarea,
-.completion-form input {
+.completion-form input,
+.lifecycle-form input {
   box-sizing: border-box;
   width: 100%;
 }
 
-.completion-form {
+.completion-form,
+.lifecycle-form {
   margin-top: 0.75rem;
 }
 
-.completion-form label {
+.completion-form label,
+.lifecycle-form label {
   display: block;
+}
+
+.lifecycle-form p {
+  margin: 0;
 }
 
 .maintenance-history {

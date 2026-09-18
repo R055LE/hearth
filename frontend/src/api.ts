@@ -28,15 +28,20 @@ const patch = <T>(path: string, body: unknown) =>
 export const api = {
   maintenanceTasks: {
     list: () => request<MaintenanceTask[]>('/maintenance-tasks'),
-    create: (task: Omit<MaintenanceTask, 'id' | 'is_active' | 'completions'>) =>
+    create: (task: Omit<MaintenanceTask, 'id' | 'is_active' | 'retired' | 'completions'>) =>
       post<MaintenanceTask>('/maintenance-tasks', task),
     update: (
       id: number,
-      task: Partial<Omit<MaintenanceTask, 'id' | 'is_active' | 'completions'>>,
+      task: Partial<Omit<MaintenanceTask, 'id' | 'is_active' | 'retired' | 'completions'>>,
     ) => patch<MaintenanceTask>(`/maintenance-tasks/${id}`, task),
     complete: (id: number, completedOn: string) =>
       post<MaintenanceTask>(`/maintenance-tasks/${id}/completions`, {
         completed_on: completedOn,
+      }),
+    retire: (id: number) => post<MaintenanceTask>(`/maintenance-tasks/${id}/retire`, {}),
+    restore: (id: number, nextDueDate: string) =>
+      post<MaintenanceTask>(`/maintenance-tasks/${id}/restore`, {
+        next_due_date: nextDueDate,
       }),
   },
   rooms: {
