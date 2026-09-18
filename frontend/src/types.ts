@@ -73,5 +73,6 @@ export interface MaintenanceTask {
   recurrence_days: number | null;
   notes: string | null;
   is_active: boolean;
+  retired: boolean;
   completions: MaintenanceCompletion[];
 }

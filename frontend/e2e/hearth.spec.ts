@@ -91,6 +91,7 @@ interface MaintenanceTaskFixture {
   recurrence_days: number | null;
   notes: string | null;
   is_active: boolean;
+  retired: boolean;
   completions: MaintenanceCompletionFixture[];
 }
 
@@ -121,6 +122,7 @@ function maintenanceTask(
     recurrence_days: 30,
     notes: 'Use the 16x25x1 filters.',
     is_active: true,
+    retired: false,
     completions: [],
     ...overrides,
   };
@@ -129,6 +131,11 @@ function maintenanceTask(
 interface ApiState {
   completedMaintenanceTask: Record<string, unknown> | null;
   createdMaintenanceTasks: Record<string, unknown>[];
+  maintenanceLifecycleRequests: {
+    action: 'retire' | 'restore';
+    taskId: number;
+    next_due_date?: string;
+  }[];
   createdRooms: Record<string, unknown>[];
   createdPoints: Record<string, unknown>[];
   deletedPointIds: number[];
@@ -143,6 +150,7 @@ async function mockApi(
   page: Page,
   options: {
     maintenanceTasks?: MaintenanceTaskFixture[];
+    failedMaintenanceActions?: ('retire' | 'restore')[];
     rooms?: (typeof room)[];
     panels?: { id: number; name: string; room_id: number | null; amperage: number; fed_from_panel_id: number | null }[];
   } = {},
@@ -150,6 +158,7 @@ async function mockApi(
   const state: ApiState = {
     completedMaintenanceTask: null,
     createdMaintenanceTasks: [],
+    maintenanceLifecycleRequests: [],
     createdRooms: [],
     createdPoints: [],
     deletedPointIds: [],
@@ -184,17 +193,49 @@ async function mockApi(
     if (path === '/api/maintenance-tasks' && method === 'POST') {
       const body = request.postDataJSON() as Omit<
         MaintenanceTaskFixture,
-        'id' | 'is_active' | 'completions'
+        'id' | 'is_active' | 'retired' | 'completions'
       >;
       const created: MaintenanceTaskFixture = {
         id: nextMaintenanceTaskId++,
         ...body,
         is_active: true,
+        retired: false,
         completions: [],
       };
       state.createdMaintenanceTasks.push(body);
       storedMaintenanceTasks.push(created);
       await route.fulfill({ status: 201, json: created });
+      return;
+    }
+
+    const maintenanceLifecycleRoute = path.match(
+      /^\/api\/maintenance-tasks\/(\d+)\/(retire|restore)$/,
+    );
+    if (maintenanceLifecycleRoute && method === 'POST') {
+      const taskId = Number(maintenanceLifecycleRoute[1]);
+      const action = maintenanceLifecycleRoute[2] as 'retire' | 'restore';
+      const task = storedMaintenanceTasks.find((candidate) => candidate.id === taskId);
+      if (!task) {
+        await route.fulfill({ status: 404, json: { detail: 'Maintenance task not found' } });
+        return;
+      }
+
+      const body = action === 'restore'
+        ? request.postDataJSON() as { next_due_date: string }
+        : undefined;
+      state.maintenanceLifecycleRequests.push({ action, taskId, ...body });
+      if (options.failedMaintenanceActions?.includes(action)) {
+        const pastTense = action === 'retire' ? 'retired' : 'restored';
+        await route.fulfill({
+          status: 409,
+          json: { detail: `Maintenance task could not be ${pastTense}` },
+        });
+        return;
+      }
+
+      task.retired = action === 'retire';
+      if (body) task.due_date = body.next_due_date;
+      await route.fulfill({ json: task });
       return;
     }
 
@@ -622,6 +663,111 @@ test('completes maintenance through a dated draft and preserves history', async 
   await expect(page.getByText(`Next due ${addDays(localDate(), 30)}`)).toBeVisible();
   await page.getByText('History (1)').click();
   await expect(page.getByText(`Completed ${localDate()} for ${localDate(-5)}`)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('retires and restores recurring maintenance without losing history', async ({ page }) => {
+  const state = await mockApi(page, {
+    maintenanceTasks: [
+      maintenanceTask({
+        due_date: localDate(-5),
+        completions: [
+          {
+            id: 1,
+            task_id: 1,
+            scheduled_for: localDate(-35),
+            completed_on: localDate(-34),
+          },
+        ],
+      }),
+    ],
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Maintenance' }).click();
+
+  let task = page.getByRole('article', { name: 'Replace furnace filter' });
+  await task.getByRole('button', { name: 'Retire Replace furnace filter' }).click();
+  let form = task.getByRole('form', { name: 'Retire Replace furnace filter' });
+  await expect(form).toContainText('details and completion history will be kept');
+  await form.getByRole('button', { name: 'Cancel retirement' }).click();
+  expect(state.maintenanceLifecycleRequests).toEqual([]);
+
+  await task.getByRole('button', { name: 'Retire Replace furnace filter' }).click();
+  form = task.getByRole('form', { name: 'Retire Replace furnace filter' });
+  await form.getByRole('button', { name: 'Retire task' }).click();
+
+  await expect.poll(() => state.maintenanceLifecycleRequests).toEqual([
+    { action: 'retire', taskId: 1 },
+  ]);
+  await expect(page.getByRole('heading', { name: 'Retired', exact: true })).toBeVisible();
+  task = page.getByRole('article', { name: 'Replace furnace filter' });
+  await expect(task.getByRole('button', { name: 'Complete Replace furnace filter' })).toHaveCount(0);
+  await expect(task).toContainText('Every 30 days');
+  await task.getByText('History (1)').click();
+  await expect(
+    task.getByText(`Completed ${localDate(-34)} for ${localDate(-35)}`),
+  ).toBeVisible();
+
+  await task.getByRole('button', { name: 'Restore Replace furnace filter' }).click();
+  form = task.getByRole('form', { name: 'Restore Replace furnace filter' });
+  await expect(form.getByLabel('Next due date')).toHaveValue('');
+  await form.getByLabel('Next due date').fill(localDate(20));
+  await form.getByRole('button', { name: 'Cancel restoration' }).click();
+  expect(state.maintenanceLifecycleRequests).toHaveLength(1);
+
+  await task.getByRole('button', { name: 'Restore Replace furnace filter' }).click();
+  form = task.getByRole('form', { name: 'Restore Replace furnace filter' });
+  await form.getByLabel('Next due date').fill(localDate(20));
+  await form.getByRole('button', { name: 'Restore task' }).click();
+
+  await expect.poll(() => state.maintenanceLifecycleRequests).toEqual([
+    { action: 'retire', taskId: 1 },
+    { action: 'restore', taskId: 1, next_due_date: localDate(20) },
+  ]);
+  task = page.getByRole('article', { name: 'Replace furnace filter' });
+  await expect(task).toContainText(`Next due ${localDate(20)}`);
+  await expect(task).toContainText('Every 30 days');
+  await expect(task.getByText('History (1)')).toBeVisible();
+  await expect(task.getByRole('button', { name: 'Complete Replace furnace filter' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('keeps failed maintenance lifecycle forms recoverable', async ({ page }) => {
+  const state = await mockApi(page, {
+    maintenanceTasks: [
+      maintenanceTask(),
+      maintenanceTask({ id: 2, title: 'Clean gutters', retired: true }),
+    ],
+    failedMaintenanceActions: ['retire', 'restore'],
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Maintenance' }).click();
+
+  const activeTask = page.getByRole('article', { name: 'Replace furnace filter' });
+  await activeTask.getByRole('button', { name: 'Retire Replace furnace filter' }).click();
+  const retireForm = activeTask.getByRole('form', { name: 'Retire Replace furnace filter' });
+  await retireForm.getByRole('button', { name: 'Retire task' }).click();
+  await expect(page.getByText(/Maintenance task could not be retired/)).toBeVisible();
+  await expect(retireForm).toBeVisible();
+  await expect(retireForm.getByRole('button', { name: 'Retire task' })).toBeEnabled();
+  await retireForm.getByRole('button', { name: 'Cancel retirement' }).click();
+
+  const retiredTask = page.getByRole('article', { name: 'Clean gutters' });
+  await retiredTask.getByRole('button', { name: 'Restore Clean gutters' }).click();
+  const restoreForm = retiredTask.getByRole('form', { name: 'Restore Clean gutters' });
+  await restoreForm.getByLabel('Next due date').fill(localDate(30));
+  await restoreForm.getByRole('button', { name: 'Restore task' }).click();
+  await expect(page.getByText(/Maintenance task could not be restored/)).toBeVisible();
+  await expect(restoreForm.getByLabel('Next due date')).toHaveValue(localDate(30));
+  await expect(restoreForm.getByRole('button', { name: 'Restore task' })).toBeEnabled();
+  await restoreForm.getByRole('button', { name: 'Cancel restoration' }).click();
+
+  expect(state.maintenanceLifecycleRequests).toEqual([
+    { action: 'retire', taskId: 1 },
+    { action: 'restore', taskId: 2, next_due_date: localDate(30) },
+  ]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 

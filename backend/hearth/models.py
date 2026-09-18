@@ -96,6 +96,9 @@ class MaintenanceTask(Base):
     recurrence_days: Mapped[int | None] = mapped_column(nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True, server_default="1")
+    # Retired recurring tasks stay listed with their history but leave the due
+    # lists; retirement never records a completion.
+    retired: Mapped[bool] = mapped_column(default=False, server_default="0")
 
     room: Mapped[Room | None] = relationship(back_populates="maintenance_tasks")
     completions: Mapped[list["MaintenanceCompletion"]] = relationship(

@@ -51,6 +51,43 @@ def update_task(
 
 
 @router.post(
+    "/{task_id}/retire",
+    response_model=schemas.MaintenanceTaskRead,
+)
+def retire_task(task_id: int, db: Session = Depends(get_db)):
+    db_task = _task_or_404(task_id, db)
+    if not db_task.is_active:
+        raise HTTPException(status_code=409, detail="Maintenance task is already closed")
+    if db_task.recurrence_days is None:
+        raise HTTPException(status_code=409, detail="Only recurring tasks can be retired")
+    if db_task.retired:
+        raise HTTPException(status_code=409, detail="Maintenance task is already retired")
+    db_task.retired = True
+    commit_or_conflict(db, "Maintenance task could not be retired")
+    db.refresh(db_task)
+    return db_task
+
+
+@router.post(
+    "/{task_id}/restore",
+    response_model=schemas.MaintenanceTaskRead,
+)
+def restore_task(
+    task_id: int,
+    restore: schemas.MaintenanceRestore,
+    db: Session = Depends(get_db),
+):
+    db_task = _task_or_404(task_id, db)
+    if not db_task.retired:
+        raise HTTPException(status_code=409, detail="Maintenance task is not retired")
+    db_task.retired = False
+    db_task.due_date = restore.next_due_date
+    commit_or_conflict(db, "Maintenance task could not be restored")
+    db.refresh(db_task)
+    return db_task
+
+
+@router.post(
     "/{task_id}/completions",
     response_model=schemas.MaintenanceTaskRead,
     status_code=201,
@@ -61,6 +98,8 @@ def complete_task(
     db: Session = Depends(get_db),
 ):
     db_task = _task_or_404(task_id, db)
+    if db_task.retired:
+        raise HTTPException(status_code=409, detail="Maintenance task is retired")
     if not db_task.is_active:
         raise HTTPException(status_code=409, detail="Maintenance task is already closed")
 
