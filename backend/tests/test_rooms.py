@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_create_and_get_room(client):
     resp = client.post(
         "/rooms",
@@ -133,3 +136,88 @@ def test_delete_room_with_circuit_point_returns_conflict(client):
 
     assert resp.status_code == 409
     assert resp.json()["detail"] == "Room still has circuit points"
+
+
+def _room_with_point(client, polygon=None):
+    room = client.post(
+        "/rooms",
+        json={
+            "name": "Kitchen",
+            "floor": "main",
+            "polygon": polygon or [[0, 0], [10, 0], [10, 10], [0, 10]],
+        },
+    ).json()
+    panel = client.post("/panels", json={"name": "Main Panel"}).json()
+    circuit = client.post(
+        "/circuits", json={"panel_id": panel["id"], "breaker_label": "1"}
+    ).json()
+    point = client.post(
+        "/circuit-points",
+        json={
+            "circuit_id": circuit["id"],
+            "room_id": room["id"],
+            "kind": "outlet",
+            "x": 2,
+            "y": 4,
+        },
+    ).json()
+    return room, point
+
+
+def test_moving_room_moves_mapped_points_by_same_offset(client):
+    room, point = _room_with_point(client)
+
+    resp = client.patch(
+        f"/rooms/{room['id']}",
+        json={"polygon": [[20, 5], [30, 5], [30, 15], [20, 15]]},
+    )
+
+    assert resp.status_code == 200
+    moved = client.get(f"/circuit-points/{point['id']}").json()
+    assert (moved["x"], moved["y"]) == (22, 9)
+
+
+def test_resizing_rectangle_scales_mapped_points_relative_to_room(client):
+    room, point = _room_with_point(client)
+
+    resp = client.patch(
+        f"/rooms/{room['id']}",
+        json={"polygon": [[0, 0], [20, 0], [20, 5], [0, 5]]},
+    )
+
+    assert resp.status_code == 200
+    moved = client.get(f"/circuit-points/{point['id']}").json()
+    assert (moved["x"], moved["y"]) == (4, 2)
+
+
+def test_resizing_wall_walk_rectangle_tolerates_cardinal_float_noise(client):
+    room, point = _room_with_point(
+        client,
+        [[0, 0], [10, 0], [10.0000000001, 10], [0.0000000001, 10]],
+    )
+
+    resp = client.patch(
+        f"/rooms/{room['id']}",
+        json={"polygon": [[0, 0], [20, 0], [20, 5], [0, 5]]},
+    )
+
+    assert resp.status_code == 200
+    moved = client.get(f"/circuit-points/{point['id']}").json()
+    assert moved["x"] == pytest.approx(4)
+    assert moved["y"] == pytest.approx(2)
+
+
+def test_rejects_shape_change_that_would_orphan_mapped_point(client):
+    room, point = _room_with_point(
+        client, [[0, 0], [10, 0], [10, 10], [5, 5], [0, 10]]
+    )
+
+    resp = client.patch(
+        f"/rooms/{room['id']}",
+        json={"polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]},
+    )
+
+    assert resp.status_code == 409
+    assert "mapped circuit point" in resp.json()["detail"]
+    unchanged = client.get(f"/circuit-points/{point['id']}").json()
+    assert (unchanged["x"], unchanged["y"]) == (2, 4)
