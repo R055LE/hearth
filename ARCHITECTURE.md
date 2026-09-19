@@ -80,6 +80,14 @@ it. Map padding follows the home's bounds, and phone map height is capped.
 Visible point symbols stay small when selected, with a separate transparent tap
 area so the selection highlight doesn't grow over room labels.
 
+Floorplan-aligned rectangles can be created and edited directly on the map. The
+form and map share one unsaved draft; Save is the only API write. Room PATCH owns
+the point relationship: translating any polygon moves its points by the same
+offset, and resizing a floorplan-aligned rectangle keeps each point at the same
+relative position. Other shape changes keep point coordinates and are rejected
+if that would leave a point outside the room. Angled rectangles and irregular
+polygons stay in the measured-wall editor and aren't converted by the map flow.
+
 An unmapped breaker opens circuit walk with its circuit ID selected, using the
 panel's floor or the first available room's floor. Leaving Floorplan clears the
 handoff, so Back/Forward doesn't restart a finished walk. With no rooms, the

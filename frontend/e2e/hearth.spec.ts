@@ -151,7 +151,10 @@ async function mockApi(
   options: {
     maintenanceTasks?: MaintenanceTaskFixture[];
     failedMaintenanceActions?: ('retire' | 'restore')[];
+    failRoomRefreshAfterSave?: boolean;
+    failRoomSave?: boolean;
     rooms?: (typeof room)[];
+    points?: (typeof point)[];
     panels?: { id: number; name: string; room_id: number | null; amperage: number; fed_from_panel_id: number | null }[];
   } = {},
 ): Promise<ApiState> {
@@ -175,7 +178,8 @@ async function mockApi(
   let storedRooms = (options.rooms ?? [room]).map((storedRoom) => ({ ...storedRoom }));
   let storedPanels = (options.panels ?? [panel, subpanel]).map((stored) => ({ ...stored }));
   let storedCircuits = [{ ...circuit }, { ...secondCircuit }, { ...subpanelCircuit }];
-  let storedPoints = [{ ...point }];
+  let storedPoints = (options.points ?? [point]).map((stored) => ({ ...stored }));
+  let roomSaved = false;
   let nextRoomId = 2;
   let nextPointId = 2;
   let nextMaintenanceTaskId = Math.max(0, ...storedMaintenanceTasks.map((task) => task.id)) + 1;
@@ -279,14 +283,23 @@ async function mockApi(
     }
 
     if (path === '/api/rooms' && method === 'GET') {
+      if (roomSaved && options.failRoomRefreshAfterSave) {
+        await route.fulfill({ status: 503, json: { detail: 'Refresh unavailable' } });
+        return;
+      }
       await route.fulfill({ json: storedRooms });
       return;
     }
     if (path === '/api/rooms' && method === 'POST') {
+      if (options.failRoomSave) {
+        await route.fulfill({ status: 409, json: { detail: 'Room could not be saved' } });
+        return;
+      }
       const body = request.postDataJSON() as Record<string, unknown>;
       const created = { id: nextRoomId++, ...body };
       state.createdRooms.push(body);
       storedRooms.push(created as typeof room);
+      roomSaved = true;
       await route.fulfill({ status: 201, json: created });
       return;
     }
@@ -299,6 +312,10 @@ async function mockApi(
       return;
     }
     if (path.startsWith('/api/floorplan/') && method === 'GET') {
+      if (roomSaved && options.failRoomRefreshAfterSave) {
+        await route.fulfill({ status: 503, json: { detail: 'Refresh unavailable' } });
+        return;
+      }
       const floorRooms = storedRooms.filter((storedRoom) => storedRoom.floor === decodeURIComponent(path.slice('/api/floorplan/'.length)));
       await route.fulfill({
         json: {
@@ -363,12 +380,36 @@ async function mockApi(
       await route.fulfill({ json: storedCircuits.find((stored) => stored.id === circuitId) });
       return;
     }
-    if (path === '/api/rooms/1' && method === 'PATCH') {
+    const roomRoute = path.match(/^\/api\/rooms\/(\d+)$/);
+    if (roomRoute && method === 'PATCH') {
+      if (options.failRoomSave) {
+        await route.fulfill({ status: 409, json: { detail: 'Room could not be saved' } });
+        return;
+      }
+      const roomId = Number(roomRoute[1]);
       state.updatedRoom = request.postDataJSON() as Record<string, unknown>;
+      const previous = storedRooms.find((stored) => stored.id === roomId);
+      const nextPolygon = state.updatedRoom.polygon as number[][] | undefined;
+      if (previous && nextPolygon && previous.polygon.length === 4 && nextPolygon.length === 4) {
+        const bounds = (polygon: number[][]) => ({
+          x: Math.min(...polygon.map(([x]) => x)),
+          y: Math.min(...polygon.map(([, y]) => y)),
+          length: Math.max(...polygon.map(([x]) => x)) - Math.min(...polygon.map(([x]) => x)),
+          width: Math.max(...polygon.map(([, y]) => y)) - Math.min(...polygon.map(([, y]) => y)),
+        });
+        const from = bounds(previous.polygon);
+        const to = bounds(nextPolygon);
+        storedPoints = storedPoints.map((stored) => stored.room_id === roomId ? {
+          ...stored,
+          x: to.x + ((stored.x - from.x) / from.length) * to.length,
+          y: to.y + ((stored.y - from.y) / from.width) * to.width,
+        } : stored);
+      }
       storedRooms = storedRooms.map((stored) =>
-        stored.id === 1 ? ({ ...stored, ...state.updatedRoom } as typeof room) : stored,
+        stored.id === roomId ? ({ ...stored, ...state.updatedRoom } as typeof room) : stored,
       );
-      await route.fulfill({ json: storedRooms.find((stored) => stored.id === 1) });
+      roomSaved = true;
+      await route.fulfill({ json: storedRooms.find((stored) => stored.id === roomId) });
       return;
     }
 
@@ -1148,10 +1189,15 @@ test('makes the floorplan controls keyboard-operable and named', async ({ page }
   await expect(page.getByRole('heading', { level: 2, name: 'Floorplan' })).toBeVisible();
 
   const addPoint = page.getByRole('button', { name: 'Add point' });
+  const roomButton = page.getByRole('button', { name: 'Room: Garage' });
   const pointButton = page.getByRole('button', { name: 'outlet: North wall outlet' });
   await expect(addPoint).toBeEnabled();
   await addPoint.focus();
   await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await expect(roomButton).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Garage');
   await page.keyboard.press('Tab');
   await expect(pointButton).toBeFocused();
   await page.keyboard.press('Enter');
@@ -1171,12 +1217,12 @@ test('keeps point placement unavailable until a room exists', async ({ page }) =
   await expect(page.getByRole('button', { name: 'Add point' })).toBeDisabled();
   await expect(page.getByText('Add a room before placing points on the floorplan.')).toBeVisible();
 
-  const addRoom = page.getByRole('button', { name: 'Add a room' });
+  const addRoom = page.getByRole('button', { name: 'Add room', exact: true });
   await addRoom.focus();
   await page.keyboard.press('Enter');
 
-  await expect(page.getByRole('heading', { level: 2, name: 'Rooms' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Add room', exact: true })).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Add room' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: 'Floorplan' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
@@ -1279,9 +1325,9 @@ for (const width of [1440, 390]) {
     await expect(page.getByText('Add a room before mapping Workshop subpanel — breaker 1.')).toBeVisible();
     await expect(page.getByText('Then return to this breaker and choose Map breaker.')).toBeVisible();
     await expect(page.locator('.walk-controls')).not.toBeVisible();
-    await page.getByRole('button', { name: 'Add a room', exact: true }).click();
-    await expect(page).toHaveURL(/#rooms$/);
-    await expect(page.getByRole('button', { name: 'Add room', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Add room', exact: true }).click();
+    await expect(page).toHaveURL(/#floorplan$/);
+    await expect(page.getByRole('form', { name: 'Add room' })).toBeVisible();
     expect(state.createdPoints).toEqual([]);
     expect(state.createdRooms).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
@@ -1476,6 +1522,141 @@ test('creates a rectangular room from length and width without wall entry', asyn
     page.getByText('walk the first wall in the chosen direction'),
   ).toBeVisible();
   await expect(page.getByRole('spinbutton', { name: 'New wall feet' })).toBeVisible();
+});
+
+test('creates, previews, positions, and cancels rooms on the phone floorplan', async ({ page }) => {
+  const state = await mockApi(page, { rooms: [], points: [] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  const canceledDraft = page.getByRole('form', { name: 'Add room' });
+  const roomMap = page.locator('.room-authoring .floorplan-svg');
+  const roomName = canceledDraft.getByRole('textbox', { name: 'Room name' });
+  const roomLength = canceledDraft.getByRole('spinbutton', { name: 'Room length in feet' });
+  const saveRoom = canceledDraft.getByRole('button', { name: 'Save room' });
+  await expect(roomMap).toBeInViewport({ ratio: 1 });
+  await expect(roomName).toBeInViewport({ ratio: 1 });
+  await expect(roomLength).toBeInViewport({ ratio: 1 });
+  await expect(saveRoom).toBeInViewport({ ratio: 1 });
+  const [mapBox, nameBox] = await Promise.all([roomMap.boundingBox(), roomName.boundingBox()]);
+  expect(mapBox!.height).toBeGreaterThanOrEqual(180);
+  expect(mapBox!.y + mapBox!.height).toBeLessThan(nameBox!.y);
+  for (const control of [roomName, roomLength, saveRoom]) {
+    expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+  await canceledDraft.getByRole('textbox', { name: 'Room name' }).fill('Discarded room');
+  await clickFloorplan(page, 0.7, 0.5);
+  await expect(page.locator('.draft-room-polygon')).toBeVisible();
+  await canceledDraft.getByRole('button', { name: 'Cancel' }).click();
+  expect(state.createdRooms).toEqual([]);
+
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  let draft = page.getByRole('form', { name: 'Add room' });
+  await draft.getByRole('textbox', { name: 'Room name' }).fill('Kitchen');
+  await draft.getByRole('spinbutton', { name: 'Room length in feet' }).fill('12');
+  await draft.getByRole('spinbutton', { name: 'Room width in feet' }).fill('10');
+  await draft.getByRole('button', { name: 'Save room' }).click();
+  await expect.poll(() => state.createdRooms).toHaveLength(1);
+
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  draft = page.getByRole('form', { name: 'Add room' });
+  await draft.getByRole('textbox', { name: 'Room name' }).fill('Living room');
+  await draft.getByRole('spinbutton', { name: 'Room length in feet' }).fill('16');
+  await draft.getByRole('spinbutton', { name: 'Room width in feet' }).fill('12');
+  await draft.getByText('Fine position (optional)').click();
+  await expect(draft.getByRole('spinbutton', { name: 'Room X position in feet' })).toHaveValue('14');
+  await expect(page.locator('.room-polygon')).toHaveCount(1);
+  await expect(page.locator('.draft-room-polygon')).toBeVisible();
+
+  await clickFloorplan(page, 0.85, 0.5);
+  await draft.getByRole('button', { name: 'Save room' }).click();
+  await expect.poll(() => state.createdRooms).toHaveLength(2);
+  const kitchenMaxX = Math.max(...(state.createdRooms[0].polygon as number[][]).map(([x]) => x));
+  const livingMinX = Math.min(...(state.createdRooms[1].polygon as number[][]).map(([x]) => x));
+  expect(livingMinX).toBeGreaterThan(kitchenMaxX);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('edits a rectangle on the map and previews mapped-point movement before save', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.goto('/');
+
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await page.getByRole('button', { name: 'Edit room on map' }).click();
+  let form = page.getByRole('form', { name: 'Edit room' });
+  const draftOutline = page.locator('.draft-room-polygon');
+  await expect(draftOutline).toHaveAttribute('vector-effect', 'non-scaling-stroke');
+  expect(await draftOutline.evaluate((element) => getComputedStyle(element).strokeWidth)).toBe('2px');
+  await form.getByRole('textbox', { name: 'Room name' }).fill('Discarded name');
+  await form.getByRole('button', { name: 'Cancel' }).click();
+  expect(state.updatedRoom).toBeNull();
+  await expect(page.locator('.floorplan-svg')).toContainText('Garage');
+
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await page.getByRole('button', { name: 'Edit room on map' }).click();
+  form = page.getByRole('form', { name: 'Edit room' });
+  await form.getByRole('textbox', { name: 'Room name' }).fill('Workshop');
+  await form.getByRole('spinbutton', { name: 'Room length in feet' }).fill('20');
+  await form.getByRole('spinbutton', { name: 'Room width in feet' }).fill('5');
+  const marker = page.locator('[data-point-id="1"]');
+  await expect(marker).toHaveAttribute('cx', '14');
+  await expect(marker).toHaveAttribute('cy', '1');
+  await clickFloorplan(page, 0.75, 0.65);
+  const previewX = await marker.getAttribute('cx');
+  const previewY = await marker.getAttribute('cy');
+  expect(previewX).not.toBe('14');
+  expect(previewY).not.toBe('1');
+
+  await form.getByRole('button', { name: 'Save room' }).click();
+  await expect.poll(() => state.updatedRoom).not.toBeNull();
+  expect(state.updatedRoom).toMatchObject({ name: 'Workshop' });
+  await expect(marker).toHaveAttribute('cx', previewX!);
+  await expect(marker).toHaveAttribute('cy', previewY!);
+});
+
+test('retains a room draft after save failure', async ({ page }) => {
+  const state = await mockApi(page, { rooms: [], points: [], failRoomSave: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  const form = page.getByRole('form', { name: 'Add room' });
+  await form.getByRole('textbox', { name: 'Room name' }).fill('Kitchen');
+  await form.getByRole('button', { name: 'Save room' }).click();
+
+  await expect(page.getByText(/Failed to create room.*Room could not be saved/)).toBeVisible();
+  await expect(form.getByRole('textbox', { name: 'Room name' })).toHaveValue('Kitchen');
+  expect(state.createdRooms).toEqual([]);
+});
+
+test('does not offer a duplicate create retry when refresh fails after save', async ({ page }) => {
+  const state = await mockApi(page, {
+    rooms: [],
+    points: [],
+    failRoomRefreshAfterSave: true,
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  const form = page.getByRole('form', { name: 'Add room' });
+  await form.getByRole('textbox', { name: 'Room name' }).fill('Kitchen');
+  await form.getByRole('button', { name: 'Save room' }).click();
+
+  await expect(page.getByText(/Room saved, but the floorplan could not refresh/)).toBeVisible();
+  await expect(form).not.toBeVisible();
+  expect(state.createdRooms).toHaveLength(1);
+});
+
+test('keeps irregular rooms on the measured geometry path', async ({ page }) => {
+  await mockApi(page, {
+    rooms: [{ ...room, polygon: [[0, 0], [10, 0], [8, 6], [3, 9], [0, 5]] } as typeof room],
+    points: [],
+  });
+  await page.goto('/');
+  await page.locator('g[aria-label="Room: Garage"]').click();
+
+  await expect(page.getByText('This room uses measured or irregular geometry.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit room on map' })).not.toBeVisible();
+  await page.getByRole('button', { name: 'Open geometry editor' }).click();
+  await expect(page).toHaveURL(/#rooms$/);
 });
 
 test('requires confirmation before deleting a point', async ({ page }) => {

@@ -342,8 +342,9 @@ export function RoomBuilder({
 
         {circuitPointCount > 0 && (
           <p>
-            This room has {circuitPointCount} circuit point(s) that won't move if you reshape it — you may
-            need to reposition them afterward in the Floorplan tab.
+            This room has {circuitPointCount} circuit point(s). Moving the whole room moves them with it;
+            resizing a floorplan-aligned rectangle keeps their relative positions. Other shape changes
+            must keep every point inside the room.
           </p>
         )}
 
