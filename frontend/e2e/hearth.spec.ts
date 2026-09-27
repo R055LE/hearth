@@ -22,6 +22,13 @@ const room = {
   },
 };
 
+const adjacentRoom = {
+  ...room,
+  id: 2,
+  name: 'Kitchen',
+  polygon: [[0, 0], [10, 0], [10, 10], [0, 10]],
+} as typeof room;
+
 const panel = {
   id: 1,
   name: 'Main panel',
@@ -1990,6 +1997,112 @@ test('edits a rectangle on the map and previews mapped-point movement before sav
   expect(state.updatedRoom).toMatchObject({ name: 'Workshop' });
   await expect(marker).toHaveAttribute('cx', previewX!);
   await expect(marker).toHaveAttribute('cy', previewY!);
+});
+
+test('drags only the selected room draft and moves its points on Save', async ({ page }) => {
+  const state = await mockApi(page, { rooms: [room, adjacentRoom] });
+  await page.goto('/');
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await page.getByRole('button', { name: 'Edit room on map' }).click();
+
+  const draft = page.getByRole('form', { name: 'Edit room' });
+  await draft.getByText('Fine position (optional)').click();
+  const outline = page.getByRole('button', { name: 'Move Garage draft' });
+  const marker = page.locator('[data-point-id="1"]');
+  await expect(page.locator('.room-polygon')).toHaveCount(2);
+  await expect(marker).toHaveAttribute('cx', '12');
+  const neighborBox = await page.locator('g[aria-label="Room: Kitchen"] .room-polygon').boundingBox();
+  if (!neighborBox) throw new Error('Neighboring room is not visible');
+  await page.mouse.move(neighborBox.x + neighborBox.width / 2, neighborBox.y + neighborBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(neighborBox.x + neighborBox.width / 2 + 30, neighborBox.y + neighborBox.height / 2 + 20);
+  await page.mouse.up();
+  await expect(outline).toHaveAttribute('points', '10,0 20,0 20,10 10,10');
+  await expect(marker).toHaveAttribute('cx', '12');
+  await outline.scrollIntoViewIfNeeded();
+  const box = await outline.boundingBox();
+  if (!box) throw new Error('Room draft is not visible');
+  const start = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 60, start.y + 30, { steps: 5 });
+  await page.mouse.up();
+
+  const movedX = await draft.getByRole('spinbutton', { name: 'Room X position in feet' }).inputValue();
+  const movedY = await draft.getByRole('spinbutton', { name: 'Room Y position in feet' }).inputValue();
+  expect(Number(movedX)).toBeGreaterThan(10);
+  expect(Number(movedY)).toBeGreaterThan(0);
+  expect(Number(await marker.getAttribute('cx'))).toBeCloseTo(Number(movedX) + 2);
+  expect(Number(await marker.getAttribute('cy'))).toBeCloseTo(Number(movedY) + 2);
+  expect(state.updatedRoom).toBeNull();
+  await expect(page.locator('g[aria-label="Room: Kitchen"] .room-polygon')).toHaveAttribute('points', '0,0 10,0 10,10 0,10');
+
+  await outline.focus();
+  await page.keyboard.press('ArrowRight');
+  expect(Number(await draft.getByRole('spinbutton', { name: 'Room X position in feet' }).inputValue()))
+    .toBeCloseTo(Number(movedX) + 0.1);
+  await draft.getByRole('button', { name: 'Cancel' }).click();
+  expect(state.updatedRoom).toBeNull();
+  await expect(marker).toHaveAttribute('cx', '12');
+  await expect(marker).toHaveAttribute('cy', '2');
+
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await page.getByRole('button', { name: 'Edit room on map' }).click();
+  const savedDraft = page.getByRole('form', { name: 'Edit room' });
+  await savedDraft.getByText('Fine position (optional)').click();
+  const savedOutline = page.getByRole('button', { name: 'Move Garage draft' });
+  await savedOutline.scrollIntoViewIfNeeded();
+  const savedBox = await savedOutline.boundingBox();
+  if (!savedBox) throw new Error('Room draft is not visible');
+  const savedStart = { x: savedBox.x + savedBox.width / 2, y: savedBox.y + savedBox.height / 2 };
+  await page.mouse.move(savedStart.x, savedStart.y);
+  await page.mouse.down();
+  await page.mouse.move(savedStart.x + 60, savedStart.y + 30, { steps: 5 });
+  await page.mouse.up();
+  const savedX = Number(await savedDraft.getByRole('spinbutton', { name: 'Room X position in feet' }).inputValue());
+  const savedY = Number(await savedDraft.getByRole('spinbutton', { name: 'Room Y position in feet' }).inputValue());
+  await savedDraft.getByRole('button', { name: 'Save room' }).click();
+  await expect.poll(() => state.updatedRoom).not.toBeNull();
+  expect(state.updatedRoom).toMatchObject({
+    polygon: [[savedX, savedY], [savedX + 10, savedY],
+      [savedX + 10, savedY + 10], [savedX, savedY + 10]],
+  });
+  await expect(marker).toHaveAttribute('cx', String(savedX + 2));
+  await expect(page.locator('.room-polygon')).toHaveCount(2);
+});
+
+test('touch drag keeps a room draft recoverable after a failed save at 390px', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  const state = await mockApi(page, { rooms: [room, adjacentRoom], failRoomSave: true });
+  await page.goto('http://127.0.0.1:4173');
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await page.getByRole('button', { name: 'Edit room on map' }).click();
+  const draft = page.getByRole('form', { name: 'Edit room' });
+  await draft.getByText('Fine position (optional)').click();
+  const outline = page.getByRole('button', { name: 'Move Garage draft' });
+  await expect(page.locator('.room-polygon')).toHaveCount(2);
+  await outline.scrollIntoViewIfNeeded();
+  const box = await outline.boundingBox();
+  if (!box) throw new Error('Room draft is not visible');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x, y }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: x + 50, y: y + 30 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+  const position = draft.getByRole('spinbutton', { name: 'Room X position in feet' });
+  await expect.poll(async () => Number(await position.inputValue())).toBeGreaterThan(10);
+  expect(state.updatedRoom).toBeNull();
+  await draft.getByRole('button', { name: 'Save room' }).click();
+  await expect(page.getByText(/Failed to save room.*Room could not be saved/)).toBeVisible();
+  await expect(position).not.toHaveValue('10');
+  await expect(page.locator('[data-point-id="1"]')).not.toHaveAttribute('cx', '12');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await draft.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('[data-point-id="1"]')).toHaveAttribute('cx', '12');
+  await context.close();
 });
 
 test('retains a room draft after save failure', async ({ page }) => {

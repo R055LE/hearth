@@ -24,6 +24,15 @@ type RoomDraft = {
 };
 type Viewport = { minX: number; minY: number; width: number; height: number };
 type PointerPosition = { clientX: number; clientY: number; pointerType: string };
+type RoomDrag = {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startPoint: { x: number; y: number };
+  origin: { x: number; y: number };
+  inverse: DOMMatrix;
+  moved: boolean;
+};
 type ViewGesture =
   | {
       kind: 'pan-candidate' | 'pan';
@@ -249,6 +258,8 @@ export function FloorplanView({
   const findConfirmationRef = useRef<HTMLDivElement>(null);
   const pointerPositions = useRef(new Map<number, PointerPosition>());
   const viewGesture = useRef<ViewGesture | null>(null);
+  const roomDrag = useRef<RoomDrag | null>(null);
+  const roomPlacement = useRef<{ pointerId: number; startClientX: number; startClientY: number } | null>(null);
   const suppressMapClick = useRef(false);
 
   function revealPointDetails() {
@@ -428,6 +439,35 @@ export function FloorplanView({
   }
 
   function handleSvgPointerDown(event: React.PointerEvent<SVGSVGElement>) {
+    if (mode === 'room') {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      if (!roomDrag.current && !roomPlacement.current) suppressMapClick.current = false;
+      const svg = event.currentTarget;
+      if (roomDraft?.roomId != null &&
+        (event.target as SVGElement).classList.contains('draft-room-polygon')) {
+        const inverse = svg.getScreenCTM()?.inverse();
+        const startPoint = mapPointFromClient(svg, event.clientX, event.clientY, inverse);
+        const origin = rectangleFromDraft(roomDraft);
+        if (!inverse || !startPoint || !origin) return;
+        roomDrag.current = {
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startPoint,
+          origin: { x: origin.x, y: origin.y },
+          inverse,
+          moved: false,
+        };
+      } else {
+        roomPlacement.current = {
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+        };
+      }
+      svg.setPointerCapture(event.pointerId);
+      return;
+    }
     if (mode !== 'idle') return;
     if (!viewGesture.current) suppressMapClick.current = false;
 
@@ -499,6 +539,29 @@ export function FloorplanView({
   }
 
   function handleSvgPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    const drag = roomDrag.current;
+    if (drag?.pointerId === event.pointerId) {
+      if (!drag.moved && Math.hypot(
+        event.clientX - drag.startClientX,
+        event.clientY - drag.startClientY,
+      ) < 4) return;
+      drag.moved = true;
+      const point = mapPointFromClient(event.currentTarget, event.clientX, event.clientY, drag.inverse);
+      if (!point) return;
+      changeRoomDraft({
+        x: String(Math.round((drag.origin.x + point.x - drag.startPoint.x) * 10) / 10),
+        y: String(Math.round((drag.origin.y + point.y - drag.startPoint.y) * 10) / 10),
+      });
+      return;
+    }
+    const placement = roomPlacement.current;
+    if (placement?.pointerId === event.pointerId) {
+      if (Math.hypot(
+        event.clientX - placement.startClientX,
+        event.clientY - placement.startClientY,
+      ) >= 4) suppressMapClick.current = true;
+      return;
+    }
     const pointer = pointerPositions.current.get(event.pointerId);
     if (pointer?.pointerType === 'touch') {
       pointerPositions.current.set(event.pointerId, {
@@ -557,6 +620,19 @@ export function FloorplanView({
   }
 
   function endSvgPointer(event: React.PointerEvent<SVGSVGElement>) {
+    const drag = roomDrag.current;
+    if (drag?.pointerId === event.pointerId) {
+      if (event.type === 'pointercancel') {
+        changeRoomDraft({ x: String(drag.origin.x), y: String(drag.origin.y) });
+      }
+      if (drag.moved) suppressMapClick.current = true;
+      roomDrag.current = null;
+      return;
+    }
+    if (roomPlacement.current?.pointerId === event.pointerId) {
+      roomPlacement.current = null;
+      return;
+    }
     pointerPositions.current.delete(event.pointerId);
     const gesture = viewGesture.current;
     if (!gesture) return;
@@ -606,6 +682,8 @@ export function FloorplanView({
   }
 
   function finishInteraction() {
+    roomDrag.current = null;
+    roomPlacement.current = null;
     setMode('idle');
     setDraftPoint(null);
     setRoomDraft(null);
@@ -1148,7 +1226,9 @@ export function FloorplanView({
                 <p id="floorplan-navigation-help">
                   {mode === 'idle'
                     ? 'Drag empty space to pan. Scroll or pinch to zoom; focus the map and use arrow keys to pan.'
-                    : 'Use Fit or the zoom controls while editing. Map gestures are reserved for your draft.'}
+                    : roomDraft?.roomId != null
+                      ? 'Drag the outlined room to move it. Focus it and use arrow keys to nudge; use Fit or zoom controls to navigate.'
+                      : 'Use Fit or the zoom controls while editing. Map gestures are reserved for your draft.'}
                 </p>
               </div>
               <svg
@@ -1225,7 +1305,23 @@ export function FloorplanView({
                     strokeWidth={2}
                     strokeDasharray="8 6"
                     vectorEffect="non-scaling-stroke"
-                    pointerEvents="none"
+                    pointerEvents={roomDraft?.roomId == null ? 'none' : 'auto'}
+                    role={roomDraft?.roomId == null ? undefined : 'button'}
+                    tabIndex={roomDraft?.roomId == null ? undefined : 0}
+                    aria-label={roomDraft?.roomId == null ? undefined : `Move ${roomDraft.name} draft`}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      if (!roomDraft || roomDraft.roomId == null) return;
+                      const step = event.shiftKey ? 1 : 0.1;
+                      const x = Number(roomDraft.x);
+                      const y = Number(roomDraft.y);
+                      if (event.key === 'ArrowLeft') changeRoomDraft({ x: String(Math.round((x - step) * 10) / 10) });
+                      else if (event.key === 'ArrowRight') changeRoomDraft({ x: String(Math.round((x + step) * 10) / 10) });
+                      else if (event.key === 'ArrowUp') changeRoomDraft({ y: String(Math.round((y - step) * 10) / 10) });
+                      else if (event.key === 'ArrowDown') changeRoomDraft({ y: String(Math.round((y + step) * 10) / 10) });
+                      else return;
+                      event.preventDefault();
+                    }}
                   />
                 )}
                 {displayedPoints.map((storedPoint) => {
@@ -1247,6 +1343,7 @@ export function FloorplanView({
                         strokeWidth={32}
                         vectorEffect="non-scaling-stroke"
                         className="point-marker"
+                        pointerEvents={mode === 'room' ? 'none' : undefined}
                         role="button"
                         tabIndex={mode === 'room' ? -1 : 0}
                         aria-pressed={isSelectedPoint}
@@ -1537,7 +1634,9 @@ function RoomDraftForm({
     >
       <h3>{draft.roomId == null ? 'Add room' : `Edit ${draft.name}`}</h3>
       <p className="placement-instruction">
-        Tap or click the map to place the room. Saved rooms stay visible until Save.
+        {draft.roomId == null
+          ? 'Tap or click the map to place the room. Saved rooms stay visible until Save.'
+          : 'Drag the outlined room or tap the map to place it. Saved rooms stay visible until Save.'}
       </p>
       <label>
         Name
