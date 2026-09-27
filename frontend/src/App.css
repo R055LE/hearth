@@ -20,6 +20,7 @@
 .room-editor input:not([type='radio']),
 .room-editor select,
 .floorplan-toolbar button,
+.floorplan-navigation button,
 .floorplan-toolbar select,
 .floorplan-sidebar button,
 .floorplan-sidebar input,
@@ -33,6 +34,7 @@
 }
 
 .tabs button:focus-visible,
+.floorplan-svg:focus-visible,
 .room-editor :is(button, input, select):focus-visible,
 .floorplan-layout :is(button, input, select, summary):focus-visible {
   outline: 2px solid CanvasText;
@@ -64,10 +66,35 @@
   margin-bottom: 0.5rem;
 }
 
+.floorplan-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.floorplan-navigation p {
+  flex: 1 1 16rem;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
 .floorplan-svg {
   width: 100%;
   height: 70vh;
   border: 1px solid #999;
+  touch-action: none;
+  cursor: grab;
+}
+
+.floorplan-svg:active {
+  cursor: grabbing;
+}
+
+.floorplan-svg.editing,
+.floorplan-svg.editing:active {
+  cursor: crosshair;
 }
 
 .room-polygon {
@@ -663,6 +690,10 @@
   }
 
   .room-authoring .floorplan-toolbar {
+    display: none;
+  }
+
+  .room-authoring .floorplan-navigation {
     display: none;
   }
 

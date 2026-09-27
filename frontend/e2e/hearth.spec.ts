@@ -426,6 +426,38 @@ async function clickFloorplan(page: Page, xRatio: number, yRatio: number) {
   await floorplan.click({ position: { x: box.width * xRatio, y: box.height * yRatio } });
 }
 
+async function clickFloorplanCoordinate(page: Page, x: number, y: number) {
+  const floorplan = page.locator('.floorplan-svg');
+  const point = await floorplan.evaluate((svg, coordinates) => {
+    const mapPoint = svg.createSVGPoint();
+    mapPoint.x = coordinates.x;
+    mapPoint.y = coordinates.y;
+    const screenPoint = mapPoint.matrixTransform(svg.getScreenCTM()!);
+    return { x: screenPoint.x, y: screenPoint.y };
+  }, { x, y });
+  await page.mouse.click(point.x, point.y);
+}
+
+async function floorplanViewBox(page: Page): Promise<number[]> {
+  return page.locator('.floorplan-svg').evaluate((svg) =>
+    (svg.getAttribute('viewBox') ?? '').split(/\s+/).map(Number),
+  );
+}
+
+async function findFloorplanBackground(page: Page): Promise<{ x: number; y: number }> {
+  const point = await page.locator('.floorplan-svg').evaluate((svg) => {
+    const rect = svg.getBoundingClientRect();
+    for (let y = rect.top + 2; y < rect.bottom - 2; y += 8) {
+      for (let x = rect.left + 2; x < rect.right - 2; x += 8) {
+        if (document.elementFromPoint(x, y) === svg) return { x, y };
+      }
+    }
+    return null;
+  });
+  if (!point) throw new Error('Could not find empty floorplan space');
+  return point;
+}
+
 for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
   test(`restores section URLs on direct loads and refresh at ${viewport.width}px`, async ({ page }) => {
     await mockApi(page, { maintenanceTasks: [maintenanceTask()] });
@@ -836,6 +868,142 @@ test('saves the location shown by the latest point preview', async ({ page }) =>
   });
 });
 
+test('zoom and fit keep point placement in floor coordinates', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.goto('/');
+  const initialViewBox = await floorplanViewBox(page);
+
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  expect((await floorplanViewBox(page))[2]).toBeLessThan(initialViewBox[2]);
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  expect(await floorplanViewBox(page)).toEqual(initialViewBox);
+
+  await page.locator('.floorplan-svg').hover();
+  await page.mouse.wheel(0, -120);
+  await expect.poll(async () => (await floorplanViewBox(page))[2]).toBeLessThan(initialViewBox[2]);
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await page.getByRole('button', { name: 'Add point' }).click();
+  await clickFloorplanCoordinate(page, 15, 5);
+  await expect(page.getByRole('spinbutton', { name: 'X:' })).toHaveValue('15');
+  await expect(page.getByRole('spinbutton', { name: 'Y:' })).toHaveValue('5');
+  expect(state.createdPoints).toHaveLength(0);
+
+  await page.getByRole('button', { name: 'Create' }).click();
+  await expect.poll(() => state.createdPoints).toHaveLength(1);
+  expect(state.createdPoints[0]).toMatchObject({ x: 15, y: 5, room_id: 1 });
+});
+
+test('pans only blank map space and focuses a keyboard-selected point', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+
+  const originalViewBox = await floorplanViewBox(page);
+  const start = await findFloorplanBackground(page);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 48, start.y + 36, { steps: 3 });
+  await page.mouse.up();
+  const pannedViewBox = await floorplanViewBox(page);
+  expect(pannedViewBox[0]).toBeLessThan(originalViewBox[0]);
+  expect(pannedViewBox[1]).toBeLessThan(originalViewBox[1]);
+  expect(state.createdPoints).toHaveLength(0);
+
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
+  await marker.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('North wall outlet');
+  const focusedViewBox = await floorplanViewBox(page);
+  expect(12).toBeGreaterThanOrEqual(focusedViewBox[0]);
+  expect(12).toBeLessThanOrEqual(focusedViewBox[0] + focusedViewBox[2]);
+  expect(2).toBeGreaterThanOrEqual(focusedViewBox[1]);
+  expect(2).toBeLessThanOrEqual(focusedViewBox[1] + focusedViewBox[3]);
+});
+
+test('keeps floorplan navigation reachable without phone overflow', async ({ page }) => {
+  const upperRoom = {
+    ...room,
+    id: 2,
+    name: 'Upper Landing',
+    floor: 'upper',
+    polygon: [[0, 0], [4, 0], [4, 4], [0, 4]],
+  };
+  await mockApi(page, { rooms: [room, upperRoom] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+
+  const controls = page.getByRole('group', { name: 'Floorplan navigation' });
+  for (const name of ['Fit', 'Zoom out', 'Zoom in']) {
+    const button = controls.getByRole('button', { name, exact: true });
+    await expect(button).toBeVisible();
+    const box = await button.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+    expect(box?.width).toBeGreaterThanOrEqual(44);
+  }
+  const mainViewBox = await floorplanViewBox(page);
+  await controls.getByRole('button', { name: 'Zoom in' }).click();
+  const zoomedViewBox = await floorplanViewBox(page);
+  await page.getByRole('combobox', { name: 'Floor:' }).selectOption('upper');
+  await expect(page.locator('.floorplan-svg')).toContainText('Upper Landing');
+  const upperViewBox = await floorplanViewBox(page);
+  expect(upperViewBox[2]).toBeLessThan(zoomedViewBox[2]);
+  expect(await page.locator('.floorplan-svg').getAttribute('aria-label')).toBe('Floorplan map for upper');
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  expect(await floorplanViewBox(page)).toEqual(upperViewBox);
+
+  await page.locator('.floorplan-svg').focus();
+  const before = await floorplanViewBox(page);
+  await page.keyboard.press('ArrowRight');
+  expect((await floorplanViewBox(page))[0]).toBeGreaterThan(before[0]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  expect(mainViewBox).not.toEqual(upperViewBox);
+});
+
+test('pinch zoom changes the viewport without selecting a map object', async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const page = await context.newPage();
+  await mockApi(page);
+  await page.goto('http://127.0.0.1:4173');
+
+  const map = page.locator('.floorplan-svg');
+  const box = await map.boundingBox();
+  if (!box) throw new Error('Floorplan is not visible');
+  const centerX = box.x + box.width / 2;
+  const centerY = box.y + box.height / 2;
+  const initialViewBox = await floorplanViewBox(page);
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [
+      { id: 1, x: centerX - 24, y: centerY },
+      { id: 2, x: centerX + 24, y: centerY },
+    ],
+  });
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchMove',
+    touchPoints: [
+      { id: 1, x: centerX - 48, y: centerY },
+      { id: 2, x: centerX + 48, y: centerY },
+    ],
+  });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+  expect((await floorplanViewBox(page))[2]).toBeLessThan(initialViewBox[2] * 0.75);
+  await expect(page.getByRole('region', { name: 'Selected room' })).not.toBeVisible();
+  await expect(page.getByRole('region', { name: 'Selected point' })).not.toBeVisible();
+  await context.close();
+});
+
 test('explains how to choose a location while adding a point', async ({ page }) => {
   await mockApi(page);
   await page.goto('/');
@@ -1189,11 +1357,21 @@ test('makes the floorplan controls keyboard-operable and named', async ({ page }
   await expect(page.getByRole('heading', { level: 2, name: 'Floorplan' })).toBeVisible();
 
   const addPoint = page.getByRole('button', { name: 'Add point' });
+  const walkButton = page.getByRole('button', { name: 'Walk circuit' });
+  const navigation = page.getByRole('group', { name: 'Floorplan navigation' });
+  const map = page.getByLabel('Floorplan map for main');
   const roomButton = page.getByRole('button', { name: 'Room: Garage' });
   const pointButton = page.getByRole('button', { name: 'outlet: North wall outlet' });
   await expect(addPoint).toBeEnabled();
   await addPoint.focus();
   await page.keyboard.press('Tab');
+  await expect(walkButton).toBeFocused();
+  for (const name of ['Fit', 'Zoom out', 'Zoom in']) {
+    await page.keyboard.press('Tab');
+    await expect(navigation.getByRole('button', { name, exact: true })).toBeFocused();
+  }
+  await page.keyboard.press('Tab');
+  await expect(map).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(roomButton).toBeFocused();
   await page.keyboard.press('Enter');
