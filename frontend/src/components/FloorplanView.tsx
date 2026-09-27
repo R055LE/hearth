@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { FloorplanFinder, type FloorplanFindTarget } from './FloorplanFinder';
 import {
   axisAlignedRectangle,
   mapPointBetweenRectangles,
@@ -100,6 +101,36 @@ function boundsForPoints(points: [number, number][]): Viewport {
   };
 }
 
+function viewportForTarget(
+  current: Viewport | null,
+  bounds: Viewport,
+  target: Viewport,
+): Viewport | null {
+  const currentView = current ?? bounds;
+  if (
+    target.minX >= currentView.minX &&
+    target.minY >= currentView.minY &&
+    target.minX + target.width <= currentView.minX + currentView.width &&
+    target.minY + target.height <= currentView.minY + currentView.height
+  ) {
+    return current;
+  }
+
+  const scale = Math.max(
+    1,
+    (target.width * 1.25) / currentView.width,
+    (target.height * 1.25) / currentView.height,
+  );
+  const width = currentView.width * scale;
+  const height = currentView.height * scale;
+  return {
+    minX: target.minX + target.width / 2 - width / 2,
+    minY: target.minY + target.height / 2 - height / 2,
+    width,
+    height,
+  };
+}
+
 function centroid(polygon: [number, number][]): [number, number] {
   const n = polygon.length || 1;
   const [sx, sy] = polygon.reduce(([ax, ay], [x, y]) => [ax + x, ay + y], [0, 0]);
@@ -188,12 +219,15 @@ export function FloorplanView({
   onOpenRooms: () => void;
 }) {
   const [allRooms, setAllRooms] = useState<Room[]>([]);
+  const [allPoints, setAllPoints] = useState<CircuitPoint[]>([]);
   const [panels, setPanels] = useState<Panel[]>([]);
   const [circuits, setCircuits] = useState<Circuit[]>([]);
   const [floor, setFloor] = useState<string>(initialFloor ?? '');
   const [plan, setPlan] = useState<Floorplan>({ rooms: [], circuit_points: [] });
+  const [planFloor, setPlanFloor] = useState<string | null>(null);
   const [selectedPointId, setSelectedPointId] = useState<number | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<number | null>(null);
+  const [selectedPanelId, setSelectedPanelId] = useState<number | null>(null);
   const [selectedCircuitId, setSelectedCircuitId] = useState<number | null>(initialCircuitId ?? null);
   const [mode, setMode] = useState<InteractionMode>(initialWalking ? 'walk' : 'idle');
   const [draftPoint, setDraftPoint] = useState<PointDraft | null>(null);
@@ -201,11 +235,18 @@ export function FloorplanView({
   const [walkCircuitId, setWalkCircuitId] = useState<number | ''>(initialWalking ? initialCircuitId ?? '' : '');
   const [walkKind, setWalkKind] = useState('outlet');
   const [walkCreatedIds, setWalkCreatedIds] = useState<number[]>([]);
+  const [findDataReady, setFindDataReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport | null>(null);
+  const [pendingFindTarget, setPendingFindTarget] = useState<FloorplanFindTarget | null>(null);
+  const [pendingFindFocus, setPendingFindFocus] = useState<{
+    target: FloorplanFindTarget;
+    floor: string;
+  } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const pointDetailsRef = useRef<HTMLDivElement>(null);
+  const findConfirmationRef = useRef<HTMLDivElement>(null);
   const pointerPositions = useRef(new Map<number, PointerPosition>());
   const viewGesture = useRef<ViewGesture | null>(null);
   const suppressMapClick = useRef(false);
@@ -237,27 +278,43 @@ export function FloorplanView({
   }, [allRooms, floor]);
 
   useEffect(() => {
-    Promise.all([api.rooms.list(), api.panels.list(), api.circuits.list()])
-      .then(([rooms, panelList, circuitList]) => {
+    Promise.all([
+      api.rooms.list(),
+      api.panels.list(),
+      api.circuits.list(),
+      api.circuitPoints.list(),
+    ])
+      .then(([rooms, panelList, circuitList, pointList]) => {
         setAllRooms(rooms);
         setPanels(panelList);
         setCircuits(circuitList);
+        setAllPoints(pointList);
         setError(null);
         if (!floor && rooms.length > 0) setFloor(rooms[0].floor);
       })
-      .catch((err) => setError(String(err)));
+      .catch((err) => setError(String(err)))
+      .finally(() => setFindDataReady(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!floor) return;
+    let current = true;
+    setPlanFloor(null);
     api.floorplan
       .get(floor)
       .then((floorplan) => {
+        if (!current) return;
         setPlan(floorplan);
+        setPlanFloor(floor);
         setError(null);
       })
-      .catch((err) => setError(String(err)));
+      .catch((err) => {
+        if (current) setError(String(err));
+      });
+    return () => {
+      current = false;
+    };
   }, [floor]);
 
   const draftRectangle = roomDraft ? rectangleFromDraft(roomDraft) : null;
@@ -314,32 +371,40 @@ export function FloorplanView({
   const visibleViewport = viewport ?? bounds;
 
   function focusMapBounds(target: Viewport) {
-    setViewport((current) => {
-      const currentView = current ?? bounds;
-      if (
-        target.minX >= currentView.minX &&
-        target.minY >= currentView.minY &&
-        target.minX + target.width <= currentView.minX + currentView.width &&
-        target.minY + target.height <= currentView.minY + currentView.height
-      ) {
-        return current;
-      }
-
-      const scale = Math.max(
-        1,
-        (target.width * 1.25) / currentView.width,
-        (target.height * 1.25) / currentView.height,
-      );
-      const width = currentView.width * scale;
-      const height = currentView.height * scale;
-      return {
-        minX: target.minX + target.width / 2 - width / 2,
-        minY: target.minY + target.height / 2 - height / 2,
-        width,
-        height,
-      };
-    });
+    setViewport((current) => viewportForTarget(current, bounds, target));
   }
+
+  useEffect(() => {
+    if (!pendingFindFocus || pendingFindFocus.floor !== floor || planFloor !== floor) return;
+    let targetBounds: Viewport | null = null;
+    if (pendingFindFocus.target.type === 'room') {
+      const room = allRooms.find((candidate) => candidate.id === pendingFindFocus.target.id);
+      if (room) targetBounds = boundsForPoints(room.polygon);
+    } else if (pendingFindFocus.target.type === 'point') {
+      const point = allPoints.find((candidate) => candidate.id === pendingFindFocus.target.id);
+      if (point) targetBounds = { minX: point.x, minY: point.y, width: 0, height: 0 };
+    } else if (pendingFindFocus.target.type === 'panel') {
+      const panel = panels.find((candidate) => candidate.id === pendingFindFocus.target.id);
+      const room = panel?.room_id == null
+        ? null
+        : allRooms.find((candidate) => candidate.id === panel.room_id);
+      if (room) targetBounds = boundsForPoints(room.polygon);
+    } else {
+      const roomById = new Map(allRooms.map((room) => [room.id, room]));
+      const points = allPoints
+        .filter((point) => point.circuit_id === pendingFindFocus.target.id)
+        .filter((point) => roomById.get(point.room_id)?.floor === pendingFindFocus.floor);
+      if (points.length) targetBounds = boundsForPoints(points.map(({ x, y }) => [x, y]));
+    }
+    if (targetBounds) {
+      setViewport((current) => viewportForTarget(current, bounds, targetBounds!));
+    }
+    setPendingFindFocus(null);
+  }, [allPoints, allRooms, bounds, floor, panels, pendingFindFocus, planFloor]);
+
+  useEffect(() => {
+    if (pendingFindTarget) findConfirmationRef.current?.focus();
+  }, [pendingFindTarget]);
 
   function zoomMap(factor: number, anchor?: { x: number; y: number }) {
     setViewport((current) => {
@@ -585,9 +650,86 @@ export function FloorplanView({
     if (selectedPointId === point.id) revealPointDetails();
     setSelectedPointId(point.id);
     setSelectedRoomId(null);
+    setSelectedPanelId(null);
     setSelectedCircuitId(point.circuit_id);
     setDraftPoint(null);
     focusMapBounds({ minX: point.x, minY: point.y, width: 0, height: 0 });
+  }
+
+  function showFindTarget(target: FloorplanFindTarget) {
+    setSelectedPointId(null);
+    setSelectedRoomId(null);
+    setSelectedPanelId(null);
+    let targetFloor: string | null = null;
+    if (target.type === 'room') {
+      const room = allRooms.find((candidate) => candidate.id === target.id);
+      if (!room) return;
+      setSelectedRoomId(room.id);
+      setSelectedCircuitId(null);
+      targetFloor = room.floor;
+    } else if (target.type === 'point') {
+      const point = allPoints.find((candidate) => candidate.id === target.id);
+      const room = point && allRooms.find((candidate) => candidate.id === point.room_id);
+      if (!point) return;
+      setSelectedPointId(point.id);
+      setSelectedCircuitId(point.circuit_id);
+      targetFloor = room?.floor ?? null;
+    } else if (target.type === 'panel') {
+      const panel = panels.find((candidate) => candidate.id === target.id);
+      const room = panel?.room_id == null
+        ? null
+        : allRooms.find((candidate) => candidate.id === panel.room_id);
+      if (!panel) return;
+      setSelectedPanelId(panel.id);
+      setSelectedRoomId(room?.id ?? null);
+      setSelectedCircuitId(null);
+      targetFloor = room?.floor ?? null;
+    } else {
+      const points = allPoints.filter((point) => point.circuit_id === target.id);
+      const pointFloors = Array.from(new Set(points
+        .map((point) => allRooms.find((room) => room.id === point.room_id)?.floor)
+        .filter((pointFloor): pointFloor is string => Boolean(pointFloor))))
+        .sort((a, b) => a.localeCompare(b));
+      setSelectedCircuitId(target.id);
+      targetFloor = pointFloors.includes(floor) ? floor : pointFloors[0] ?? null;
+    }
+
+    if (targetFloor) {
+      setPendingFindFocus({ target, floor: targetFloor });
+      if (targetFloor !== floor) setViewport(null);
+      setFloor(targetFloor);
+    } else {
+      setPendingFindFocus(null);
+    }
+  }
+
+  function chooseFindTarget(target: FloorplanFindTarget) {
+    if (roomDraft || draftPoint) {
+      setPendingFindTarget(target);
+      return;
+    }
+    if (mode === 'walk') finishWalk();
+    else if (mode !== 'idle') finishInteraction();
+    showFindTarget(target);
+  }
+
+  async function savePendingFindDraft() {
+    if (!pendingFindTarget) return;
+    const target = pendingFindTarget;
+    const saved = roomDraft ? await saveRoomDraft() : await saveDraft();
+    if (!saved) return;
+    if (mode === 'walk') finishWalk();
+    setPendingFindTarget(null);
+    showFindTarget(target);
+  }
+
+  function discardPendingFindDraft() {
+    if (!pendingFindTarget) return;
+    const target = pendingFindTarget;
+    if (mode === 'walk') finishWalk();
+    else finishInteraction();
+    setPendingFindTarget(null);
+    showFindTarget(target);
   }
 
   function beginEdit(move: boolean) {
@@ -599,11 +741,11 @@ export function FloorplanView({
   }
 
   function handleFloorChange(nextFloor: string) {
+    if (nextFloor === floor) return;
     if (mode === 'walk') setWalkCreatedIds([]);
     finishInteraction();
     setSelectedPointId(null);
     setSelectedRoomId(null);
-    setSelectedCircuitId(null);
     setViewport(null);
     setFloor(nextFloor);
   }
@@ -635,6 +777,8 @@ export function FloorplanView({
     if (mode !== 'idle') return;
     setSelectedRoomId(room.id);
     setSelectedPointId(null);
+    setSelectedPanelId(null);
+    setSelectedCircuitId(null);
     setDraftPoint(null);
     focusMapBounds(boundsForPoints(room.polygon));
   }
@@ -665,10 +809,10 @@ export function FloorplanView({
     setRoomDraft((current) => (current ? { ...current, ...change } : current));
   }
 
-  async function saveRoomDraft() {
-    if (!roomDraft) return;
+  async function saveRoomDraft(): Promise<boolean> {
+    if (!roomDraft) return false;
     const rectangle = rectangleFromDraft(roomDraft);
-    if (!rectangle || !roomDraft.name.trim() || !roomDraft.floor.trim()) return;
+    if (!rectangle || !roomDraft.name.trim() || !roomDraft.floor.trim()) return false;
     const payload = {
       name: roomDraft.name,
       floor: roomDraft.floor,
@@ -692,14 +836,23 @@ export function FloorplanView({
         }`,
       );
       setSaving(false);
-      return;
+      return false;
     }
+
+    const updatedPoints = editedRoom && editedRectangle
+      ? allPoints.map((point) => {
+          if (point.room_id !== editedRoom.id) return point;
+          const [x, y] = mapPointBetweenRectangles([point.x, point.y], editedRectangle, rectangle);
+          return { ...point, x, y };
+        })
+      : allPoints;
 
     const localRooms = [
       ...allRooms.filter((room) => room.id !== saved.id),
       saved,
     ];
     setAllRooms(localRooms);
+    setAllPoints(updatedPoints);
     setPlan({
       rooms: [
         ...displayedRooms.filter((room) => room.id !== saved.id),
@@ -714,11 +867,13 @@ export function FloorplanView({
     setError(null);
 
     try {
-      const [rooms, floorplan] = await Promise.all([
+      const [rooms, floorplan, points] = await Promise.all([
         api.rooms.list(),
         api.floorplan.get(saved.floor),
+        api.circuitPoints.list(),
       ]);
       setAllRooms(rooms);
+      setAllPoints(points);
       setPlan(floorplan);
     } catch (err) {
       setError(
@@ -728,6 +883,7 @@ export function FloorplanView({
       );
     }
     setSaving(false);
+    return true;
   }
 
   function handleSvgClick(evt: React.MouseEvent<SVGSVGElement>) {
@@ -772,12 +928,12 @@ export function FloorplanView({
     setDraftPoint((current) => (current ? { ...current, ...change } : current));
   }
 
-  async function saveDraft() {
-    if (!draftPoint) return;
+  async function saveDraft(): Promise<boolean> {
+    if (!draftPoint) return false;
     setSaving(true);
     try {
       if (mode === 'edit' || mode === 'move') {
-        if (selectedPointId == null) return;
+        if (selectedPointId == null) return false;
         const saved = await api.circuitPoints.update(selectedPointId, draftPoint);
         setPlan((current) => ({
           ...current,
@@ -785,6 +941,7 @@ export function FloorplanView({
             point.id === saved.id ? saved : point,
           ),
         }));
+        setAllPoints((current) => current.map((point) => point.id === saved.id ? saved : point));
         setSelectedCircuitId(saved.circuit_id);
         finishInteraction();
       } else {
@@ -793,6 +950,7 @@ export function FloorplanView({
           ...current,
           circuit_points: [...current.circuit_points, saved],
         }));
+        setAllPoints((current) => [...current, saved]);
         if (mode === 'walk') {
           setWalkCreatedIds((ids) => [...ids, saved.id]);
           setDraftPoint(null);
@@ -803,8 +961,10 @@ export function FloorplanView({
         }
       }
       setError(null);
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -819,6 +979,7 @@ export function FloorplanView({
         ...current,
         circuit_points: current.circuit_points.filter((point) => point.id !== pointId),
       }));
+      setAllPoints((current) => current.filter((point) => point.id !== pointId));
       setWalkCreatedIds((ids) => ids.slice(0, -1));
       setError(null);
     } catch (err) {
@@ -835,6 +996,7 @@ export function FloorplanView({
         ...current,
         circuit_points: current.circuit_points.filter((point) => point.id !== selectedPointId),
       }));
+      setAllPoints((current) => current.filter((point) => point.id !== selectedPointId));
       setSelectedPointId(null);
       setSelectedCircuitId(null);
       setError(null);
@@ -845,7 +1007,25 @@ export function FloorplanView({
 
   const selectedPoint = plan.circuit_points.find((p) => p.id === selectedPointId) ?? null;
   const selectedRoom = allRooms.find((room) => room.id === selectedRoomId) ?? null;
+  const selectedPanel = panels.find((panel) => panel.id === selectedPanelId) ?? null;
+  const selectedPanelRoom = selectedPanel?.room_id == null
+    ? null
+    : allRooms.find((room) => room.id === selectedPanel.room_id) ?? null;
   const selectedCircuit = circuits.find((c) => c.id === selectedCircuitId) ?? null;
+  const selectedCircuitPanel = selectedCircuit
+    ? panels.find((panel) => panel.id === selectedCircuit.panel_id) ?? null
+    : null;
+  const selectedCircuitPoints = selectedCircuit
+    ? allPoints.filter((point) => point.circuit_id === selectedCircuit.id)
+    : [];
+  const selectedCircuitPointFloors = new Map<string, CircuitPoint[]>();
+  for (const point of selectedCircuitPoints) {
+    const pointFloor = allRooms.find((room) => room.id === point.room_id)?.floor ?? 'Floor not found';
+    selectedCircuitPointFloors.set(pointFloor, [
+      ...(selectedCircuitPointFloors.get(pointFloor) ?? []),
+      point,
+    ]);
+  }
   const activeEdit = mode === 'edit' || mode === 'move';
   const markerRadius = Math.max(bounds.width, bounds.height) * 0.018;
 
@@ -859,6 +1039,56 @@ export function FloorplanView({
       >
         <div className="floorplan-main">
           {error && <p className="error">{error}</p>}
+          <FloorplanFinder
+            rooms={allRooms}
+            points={allPoints}
+            panels={panels}
+            circuits={circuits}
+            loading={!findDataReady}
+            onSelect={chooseFindTarget}
+          />
+          {pendingFindTarget && (
+            <div
+              className="floorplan-find-confirmation"
+              ref={findConfirmationRef}
+              role="alertdialog"
+              aria-labelledby="floorplan-find-confirmation-title"
+              aria-describedby="floorplan-find-confirmation-description"
+              tabIndex={-1}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  setPendingFindTarget(null);
+                  document.getElementById('floorplan-find-query')?.focus();
+                }
+              }}
+            >
+              <h3 id="floorplan-find-confirmation-title">Leave this draft?</h3>
+              <p id="floorplan-find-confirmation-description">
+                {roomDraft
+                  ? 'Save the room draft, discard it, or stay and keep editing before finding this item.'
+                  : mode === 'walk'
+                    ? 'Earlier points in this walk are already saved. Save or discard only the current point draft, or stay.'
+                    : 'Save the point draft, discard it, or stay and keep editing before finding this item.'}
+              </p>
+              <div className="form-actions">
+                <button type="button" onClick={savePendingFindDraft} disabled={saving}>
+                  {roomDraft ? 'Save room and find' : 'Save point and find'}
+                </button>
+                <button type="button" onClick={discardPendingFindDraft} disabled={saving}>
+                  {roomDraft ? 'Discard room and find' : 'Discard point and find'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingFindTarget(null);
+                    document.getElementById('floorplan-find-query')?.focus();
+                  }}
+                >
+                  Stay
+                </button>
+              </div>
+            </div>
+          )}
           <div className="floorplan-toolbar">
             <label>
               Floor:{' '}
@@ -1117,6 +1347,38 @@ export function FloorplanView({
                 <button type="button" onClick={deleteSelectedPoint}>Delete point</button>
               </div>
             </div>
+          ) : selectedPanel && mode === 'idle' ? (
+            <div className="info-card panel-details" role="region" aria-label="Selected panel">
+              <h3>{selectedPanel.name}</h3>
+              <p>
+                Location: {selectedPanelRoom
+                  ? `${selectedPanelRoom.name} · ${selectedPanelRoom.floor}`
+                  : 'not recorded'}
+              </p>
+              {selectedPanel.amperage && <p>{selectedPanel.amperage}A</p>}
+              {selectedPanel.fed_from_panel_id != null && (
+                <p>Fed from: {panels.find((panel) => panel.id === selectedPanel.fed_from_panel_id)?.name ?? 'unknown panel'}</p>
+              )}
+              <h4>Breakers</h4>
+              {circuits.filter((circuit) => circuit.panel_id === selectedPanel.id).length > 0 ? (
+                <ul>
+                  {circuits
+                    .filter((circuit) => circuit.panel_id === selectedPanel.id)
+                    .map((circuit) => {
+                      const pointCount = allPoints.filter((point) => point.circuit_id === circuit.id).length;
+                      return (
+                        <li key={circuit.id}>
+                          <button type="button" onClick={() => chooseFindTarget({ type: 'circuit', id: circuit.id })}>
+                            Breaker {circuit.breaker_label}: {circuit.verified_description ?? 'No verified description'} · {pointCount > 0 ? `${pointCount} mapped points` : 'Unmapped'}
+                          </button>
+                        </li>
+                      );
+                    })}
+                </ul>
+              ) : (
+                <p>No breakers recorded.</p>
+              )}
+            </div>
           ) : selectedRoom && mode === 'idle' ? (
             <div className="info-card room-details" role="region" aria-label="Selected room">
               <h3>{selectedRoom.name}</h3>
@@ -1129,6 +1391,37 @@ export function FloorplanView({
                 <>
                   <p>This room uses measured or irregular geometry.</p>
                   <button type="button" onClick={onOpenRooms}>Open geometry editor</button>
+                </>
+              )}
+            </div>
+          ) : selectedCircuit && mode === 'idle' ? (
+            <div className="info-card breaker-details-card" role="region" aria-label="Selected breaker">
+              <h3>{selectedCircuitPanel?.name ?? 'Unknown panel'} · Breaker {selectedCircuit.breaker_label}</h3>
+              <p>{selectedCircuit.verified_description ?? 'No verified description.'}</p>
+              {selectedCircuitPoints.length === 0 ? (
+                <p>Unmapped: this breaker has no points on the floorplan.</p>
+              ) : (
+                <>
+                  <p>{selectedCircuitPoints.length} mapped point{selectedCircuitPoints.length === 1 ? '' : 's'} across {selectedCircuitPointFloors.size} floor{selectedCircuitPointFloors.size === 1 ? '' : 's'}.</p>
+                  {Array.from(selectedCircuitPointFloors.entries())
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([pointFloor, points]) => (
+                      <section key={pointFloor} aria-label={`${pointFloor} mapped points`}>
+                        <h4>{pointFloor}</h4>
+                        <ul>
+                          {points.map((point) => {
+                            const room = allRooms.find((candidate) => candidate.id === point.room_id);
+                            return (
+                              <li key={point.id}>
+                                <button type="button" onClick={() => chooseFindTarget({ type: 'point', id: point.id })}>
+                                  {point.label?.trim() || point.kind} · {room?.name ?? 'Unknown room'}
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </section>
+                    ))}
                 </>
               )}
             </div>
@@ -1199,18 +1492,7 @@ export function FloorplanView({
                             <button
                               type="button"
                               className={circuit.id === selectedCircuitId ? 'selected' : ''}
-                              onClick={() => {
-                                setSelectedCircuitId(circuit.id);
-                                setSelectedPointId(null);
-                                const circuitPoints = displayedPoints.filter(
-                                  (point) => point.circuit_id === circuit.id,
-                                );
-                                if (circuitPoints.length > 0) {
-                                  focusMapBounds(
-                                    boundsForPoints(circuitPoints.map(({ x, y }) => [x, y])),
-                                  );
-                                }
-                              }}
+                              onClick={() => chooseFindTarget({ type: 'circuit', id: circuit.id })}
                             >
                               Breaker {circuit.breaker_label}
                               {circuit.verified_description ? ` — ${circuit.verified_description}` : ''}

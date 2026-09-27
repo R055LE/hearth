@@ -180,8 +180,8 @@ async function mockApi(
   let storedCircuits = [{ ...circuit }, { ...secondCircuit }, { ...subpanelCircuit }];
   let storedPoints = (options.points ?? [point]).map((stored) => ({ ...stored }));
   let roomSaved = false;
-  let nextRoomId = 2;
-  let nextPointId = 2;
+  let nextRoomId = Math.max(0, ...storedRooms.map((stored) => stored.id)) + 1;
+  let nextPointId = Math.max(0, ...storedPoints.map((stored) => stored.id)) + 1;
   let nextMaintenanceTaskId = Math.max(0, ...storedMaintenanceTasks.map((task) => task.id)) + 1;
   let nextCompletionId = 1;
 
@@ -442,6 +442,11 @@ async function floorplanViewBox(page: Page): Promise<number[]> {
   return page.locator('.floorplan-svg').evaluate((svg) =>
     (svg.getAttribute('viewBox') ?? '').split(/\s+/).map(Number),
   );
+}
+
+async function openFloorplanFinder(page: Page) {
+  const openButton = page.getByRole('button', { name: 'Open find' });
+  if (await openButton.count()) await openButton.click();
 }
 
 async function findFloorplanBackground(page: Page): Promise<{ x: number; y: number }> {
@@ -963,6 +968,200 @@ test('keeps floorplan navigation reachable without phone overflow', async ({ pag
   expect((await floorplanViewBox(page))[0]).toBeGreaterThan(before[0]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   expect(mainViewBox).not.toEqual(upperViewBox);
+});
+
+test('finds upper-floor points and keeps breaker points highlighted across floors', async ({ page }) => {
+  const upperRoom = {
+    ...room,
+    id: 2,
+    name: 'Upstairs garage',
+    floor: 'upper',
+    polygon: [[30, 0], [40, 0], [40, 10], [30, 10]],
+  };
+  const upperPoint = {
+    ...point,
+    id: 2,
+    room_id: upperRoom.id,
+    kind: 'smoke_detector',
+    label: 'Upper smoke alarm',
+    x: 32,
+    y: 3,
+  };
+  await mockApi(page, { rooms: [room, upperRoom], points: [point, upperPoint] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await openFloorplanFinder(page);
+
+  const search = page.getByRole('searchbox', { name: 'Room, point, panel, breaker, or verified description' });
+  await search.fill('Upper smoke alarm');
+  const upperPointResult = page.locator('[data-find-type="point"][data-find-id="2"]');
+  await expect(upperPointResult).toContainText('upper');
+  await upperPointResult.getByRole('button').click();
+  await expect(page.getByRole('combobox', { name: 'Floor:' })).toHaveValue('upper');
+  await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('Upper smoke alarm');
+  await expect(page.locator('[data-point-id="2"]')).toHaveAttribute('aria-pressed', 'true');
+
+  await search.fill('Breaker 1');
+  const breakerResult = page.locator('[data-find-type="circuit"][data-find-id="1"]');
+  await expect(breakerResult).toContainText('main, upper');
+  await breakerResult.getByRole('button').click();
+  const breakerDetails = page.getByRole('region', { name: 'Selected breaker' });
+  await expect(breakerDetails).toContainText('2 mapped points across 2 floors');
+  await expect(breakerDetails).toContainText('North wall outlet');
+  await expect(breakerDetails).toContainText('Upper smoke alarm');
+  await expect(page.locator('[data-point-id="2"] + .point-symbol')).toHaveAttribute('stroke', '#f97316');
+
+  await page.getByRole('combobox', { name: 'Floor:' }).selectOption('main');
+  await expect(page.locator('[data-point-id="1"] + .point-symbol')).toHaveAttribute('stroke', '#f97316');
+  await expect(breakerDetails).toContainText('Upper smoke alarm');
+  await page.getByRole('button', { name: 'Close find' }).click();
+  await expect(page.getByLabel('Floorplan map for main')).toBeVisible();
+  const roomOnMap = page.getByRole('button', { name: 'Room: Garage' });
+  await roomOnMap.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Garage');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('distinguishes matching rooms and panels and explains empty and no-match states', async ({ page }) => {
+  const upperGarage = {
+    ...room,
+    id: 2,
+    floor: 'upper',
+    polygon: [[30, 0], [40, 0], [40, 10], [30, 10]],
+  };
+  await mockApi(page, {
+    rooms: [room, upperGarage],
+    panels: [{ ...panel, name: 'Garage' }, subpanel],
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await openFloorplanFinder(page);
+
+  const search = page.getByRole('searchbox', { name: 'Room, point, panel, breaker, or verified description' });
+  await expect(page.getByText('Type to search saved rooms, mapped points, panels, and breakers.')).toBeVisible();
+  await search.focus();
+  await page.keyboard.type('Garage');
+  const mainRoomResult = page.locator('[data-find-type="room"][data-find-id="1"] button');
+  const upperRoomResult = page.locator('[data-find-type="room"][data-find-id="2"] button');
+  const pointResult = page.locator('[data-find-type="point"][data-find-id="1"] button');
+  const panelResult = page.locator('[data-find-type="panel"][data-find-id="1"] button');
+  await expect(mainRoomResult).toContainText('Room');
+  await expect(mainRoomResult).toContainText('main');
+  await expect(upperRoomResult).toContainText('Room');
+  await expect(upperRoomResult).toContainText('upper');
+  await expect(panelResult).toContainText('Panel');
+  await expect(panelResult).toContainText('main');
+
+  await page.keyboard.press('Tab');
+  await expect(mainRoomResult).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(upperRoomResult).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(pointResult).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(panelResult).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Selected panel' })).toContainText('Location: Garage');
+  await expect(page.getByRole('button', { name: 'Room: Garage' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+
+  await search.fill('no saved item has this name');
+  await expect(page.getByText(/No matches\. Try a room name/)).toBeVisible();
+  await page.getByRole('button', { name: 'Close find' }).click();
+  await expect(page.getByLabel('Floorplan map for main')).toBeVisible();
+});
+
+test('finds an unmapped breaker and excludes unverified panel sticker text', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+
+  const search = page.getByRole('searchbox', { name: 'Room, point, panel, breaker, or verified description' });
+  await search.fill('breaker 2');
+  const breakerResult = page.locator('[data-find-type="circuit"][data-find-id="2"]');
+  await expect(breakerResult).toContainText('Unmapped');
+  await breakerResult.getByRole('button').click();
+  await expect(page.getByRole('region', { name: 'Selected breaker' })).toContainText(
+    'Unmapped: this breaker has no points on the floorplan.',
+  );
+
+  await search.fill('Garage lights');
+  await expect(page.getByText(/No matches\. Try a room name/)).toBeVisible();
+  await search.fill('north and east walls');
+  await expect(page.locator('[data-find-type="circuit"][data-find-id="1"]')).toBeVisible();
+  await expect(page.locator('[data-find-type="point"][data-find-id="1"]')).toBeVisible();
+});
+
+test('asks before finding away from a room draft and saves or discards only on choice', async ({ page }) => {
+  const upperRoom = {
+    ...room,
+    id: 2,
+    name: 'Upper room',
+    floor: 'upper',
+    polygon: [[30, 0], [40, 0], [40, 10], [30, 10]],
+  };
+  const state = await mockApi(page, { rooms: [room, upperRoom] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  await openFloorplanFinder(page);
+  const roomForm = page.getByRole('form', { name: 'Add room' });
+  await roomForm.getByRole('textbox', { name: 'Room name' }).fill('Discarded draft');
+  const search = page.getByRole('searchbox', { name: 'Room, point, panel, breaker, or verified description' });
+  await search.fill('Upper room');
+  const upperRoomResult = page.locator('[data-find-type="room"][data-find-id="2"] button');
+  await upperRoomResult.click();
+  const confirmation = page.getByRole('alertdialog', { name: 'Leave this draft?' });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Stay' }).click();
+  await expect(roomForm).toBeVisible();
+  expect(state.createdRooms).toEqual([]);
+
+  await upperRoomResult.click();
+  await confirmation.getByRole('button', { name: 'Discard room and find' }).click();
+  await expect(page.getByRole('combobox', { name: 'Floor:' })).toHaveValue('upper');
+  await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Upper room');
+  expect(state.createdRooms).toEqual([]);
+
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  await openFloorplanFinder(page);
+  await page.getByRole('form', { name: 'Add room' }).getByRole('textbox', { name: 'Room name' }).fill('Saved draft');
+  await search.fill('Garage');
+  await page.locator('[data-find-type="room"][data-find-id="1"] button').click();
+  await page.getByRole('alertdialog', { name: 'Leave this draft?' })
+    .getByRole('button', { name: 'Save room and find' }).click();
+  await expect.poll(() => state.createdRooms).toHaveLength(1);
+  await expect(page.getByRole('combobox', { name: 'Floor:' })).toHaveValue('main');
+  await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Garage');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('keeps a room draft when saving it before find fails', async ({ page }) => {
+  const upperRoom = {
+    ...room,
+    id: 2,
+    name: 'Upper room',
+    floor: 'upper',
+    polygon: [[30, 0], [40, 0], [40, 10], [30, 10]],
+  };
+  const state = await mockApi(page, { rooms: [room, upperRoom], failRoomSave: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  await openFloorplanFinder(page);
+  await page.getByRole('form', { name: 'Add room' }).getByRole('textbox', { name: 'Room name' }).fill('Unsaved room');
+
+  const search = page.getByRole('searchbox', { name: 'Room, point, panel, breaker, or verified description' });
+  await search.fill('Upper room');
+  await page.locator('[data-find-type="room"][data-find-id="2"] button').click();
+  await page.getByRole('alertdialog', { name: 'Leave this draft?' })
+    .getByRole('button', { name: 'Save room and find' }).click();
+
+  await expect(page.getByText(/Failed to create room:/)).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Add room' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Floor:' })).toHaveValue('main');
+  await expect(page.getByRole('alertdialog', { name: 'Leave this draft?' })).toBeVisible();
+  expect(state.createdRooms).toEqual([]);
 });
 
 test('pinch zoom changes the viewport without selecting a map object', async ({ browser }) => {

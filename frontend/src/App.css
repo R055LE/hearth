@@ -58,6 +58,100 @@
   min-width: 0;
 }
 
+.floorplan-finder {
+  min-width: 0;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem;
+  border: 1px solid #999;
+  border-radius: 4px;
+}
+
+.floorplan-finder-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.floorplan-finder-heading h3 {
+  margin: 0;
+}
+
+.floorplan-finder label {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.floorplan-finder input {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  font: inherit;
+  padding: 0.5rem;
+}
+
+.floorplan-find-status {
+  margin: 0.5rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.floorplan-find-results {
+  max-height: 16rem;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.floorplan-find-results li + li {
+  border-top: 1px solid #999;
+}
+
+.floorplan-find-results button {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  justify-items: start;
+  gap: 0.125rem;
+  padding: 0.5rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+.floorplan-find-kind {
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+.floorplan-find-confirmation {
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  border: 2px solid #b45309;
+  border-radius: 4px;
+}
+
+.floorplan-find-confirmation:focus {
+  outline: 2px solid CanvasText;
+  outline-offset: 2px;
+}
+
+.floorplan-find-confirmation h3,
+.floorplan-find-confirmation p {
+  margin-top: 0;
+}
+
+.panel-details button,
+.breaker-details-card button {
+  max-width: 100%;
+  min-height: 44px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  font: inherit;
+  padding: 0.5rem;
+}
+
 .floorplan-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -690,6 +784,16 @@
   }
 
   .room-authoring .floorplan-toolbar {
+    display: none;
+  }
+
+  .room-authoring .floorplan-finder {
+    margin-bottom: 0.25rem;
+    padding: 0;
+    border: 0;
+  }
+
+  .room-authoring .floorplan-finder-heading h3 {
     display: none;
   }
 
