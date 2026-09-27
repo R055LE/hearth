@@ -216,6 +216,18 @@
   stroke: #f97316;
 }
 
+.draft-room-polygon[role='button'] {
+  cursor: grab;
+}
+
+.draft-room-polygon[role='button']:active {
+  cursor: grabbing;
+}
+
+.draft-room-polygon[role='button']:focus-visible {
+  stroke: #111;
+}
+
 .anchor-room {
   stroke: #f97316;
   stroke-width: 0.6;
