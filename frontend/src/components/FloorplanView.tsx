@@ -21,6 +21,26 @@ type RoomDraft = {
   x: string;
   y: string;
 };
+type Viewport = { minX: number; minY: number; width: number; height: number };
+type PointerPosition = { clientX: number; clientY: number; pointerType: string };
+type ViewGesture =
+  | {
+      kind: 'pan-candidate' | 'pan';
+      pointerId: number;
+      startClientX: number;
+      startClientY: number;
+      startPoint: { x: number; y: number };
+      startViewport: Viewport;
+      inverse: DOMMatrix;
+    }
+  | {
+      kind: 'pinch';
+      pointerIds: [number, number];
+      startDistance: number;
+      startMidpoint: { x: number; y: number };
+      startViewport: Viewport;
+      inverse: DOMMatrix;
+    };
 
 function rectangleFromDraft(draft: RoomDraft): AxisAlignedRectangle | null {
   const rectangle = {
@@ -51,6 +71,33 @@ function getSvgPoint(svg: SVGSVGElement, evt: React.MouseEvent): { x: number; y:
   if (!ctm) return { x: 0, y: 0 };
   const transformed = pt.matrixTransform(ctm.inverse());
   return { x: Math.round(transformed.x * 10) / 10, y: Math.round(transformed.y * 10) / 10 };
+}
+
+function mapPointFromClient(
+  svg: SVGSVGElement,
+  clientX: number,
+  clientY: number,
+  inverse = svg.getScreenCTM()?.inverse(),
+): { x: number; y: number } | null {
+  if (!inverse) return null;
+  const point = svg.createSVGPoint();
+  point.x = clientX;
+  point.y = clientY;
+  const transformed = point.matrixTransform(inverse);
+  return { x: transformed.x, y: transformed.y };
+}
+
+function boundsForPoints(points: [number, number][]): Viewport {
+  const xs = points.map(([x]) => x);
+  const ys = points.map(([, y]) => y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  return {
+    minX,
+    minY,
+    width: Math.max(...xs) - minX,
+    height: Math.max(...ys) - minY,
+  };
 }
 
 function centroid(polygon: [number, number][]): [number, number] {
@@ -156,8 +203,12 @@ export function FloorplanView({
   const [walkCreatedIds, setWalkCreatedIds] = useState<number[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<Viewport | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const pointDetailsRef = useRef<HTMLDivElement>(null);
+  const pointerPositions = useRef(new Map<number, PointerPosition>());
+  const viewGesture = useRef<ViewGesture | null>(null);
+  const suppressMapClick = useRef(false);
 
   function revealPointDetails() {
     if (!window.matchMedia('(max-width: 700px)').matches) return;
@@ -260,6 +311,227 @@ export function FloorplanView({
     const height = Math.max(...ys) - minY + pad;
     return { minX, minY, width, height };
   }, [displayedRooms, displayedPoints, draftPolygon]);
+  const visibleViewport = viewport ?? bounds;
+
+  function focusMapBounds(target: Viewport) {
+    setViewport((current) => {
+      const currentView = current ?? bounds;
+      if (
+        target.minX >= currentView.minX &&
+        target.minY >= currentView.minY &&
+        target.minX + target.width <= currentView.minX + currentView.width &&
+        target.minY + target.height <= currentView.minY + currentView.height
+      ) {
+        return current;
+      }
+
+      const scale = Math.max(
+        1,
+        (target.width * 1.25) / currentView.width,
+        (target.height * 1.25) / currentView.height,
+      );
+      const width = currentView.width * scale;
+      const height = currentView.height * scale;
+      return {
+        minX: target.minX + target.width / 2 - width / 2,
+        minY: target.minY + target.height / 2 - height / 2,
+        width,
+        height,
+      };
+    });
+  }
+
+  function zoomMap(factor: number, anchor?: { x: number; y: number }) {
+    setViewport((current) => {
+      const currentView = current ?? bounds;
+      const center = anchor ?? {
+        x: currentView.minX + currentView.width / 2,
+        y: currentView.minY + currentView.height / 2,
+      };
+      const nextWidth = Math.min(
+        bounds.width * 4,
+        Math.max(bounds.width / 12, currentView.width * factor),
+      );
+      const scale = nextWidth / currentView.width;
+      return {
+        minX: center.x - (center.x - currentView.minX) * scale,
+        minY: center.y - (center.y - currentView.minY) * scale,
+        width: nextWidth,
+        height: currentView.height * scale,
+      };
+    });
+  }
+
+  function handleSvgPointerDown(event: React.PointerEvent<SVGSVGElement>) {
+    if (mode !== 'idle') return;
+    if (!viewGesture.current) suppressMapClick.current = false;
+
+    const svg = event.currentTarget;
+    const inverse = svg.getScreenCTM()?.inverse();
+    if (!inverse) return;
+
+    if (event.pointerType === 'touch') {
+      pointerPositions.current.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        pointerType: event.pointerType,
+      });
+      const touches = Array.from(pointerPositions.current.entries()).filter(
+        ([, pointer]) => pointer.pointerType === 'touch',
+      );
+      if (touches.length >= 2) {
+        const [first, second] = touches.slice(-2);
+        const [firstId, firstPointer] = first;
+        const [secondId, secondPointer] = second;
+        const midpointX = (firstPointer.clientX + secondPointer.clientX) / 2;
+        const midpointY = (firstPointer.clientY + secondPointer.clientY) / 2;
+        const startMidpoint = mapPointFromClient(svg, midpointX, midpointY, inverse);
+        if (!startMidpoint) return;
+        viewGesture.current = {
+          kind: 'pinch',
+          pointerIds: [firstId, secondId],
+          startDistance: Math.hypot(
+            secondPointer.clientX - firstPointer.clientX,
+            secondPointer.clientY - firstPointer.clientY,
+          ),
+          startMidpoint,
+          startViewport: visibleViewport,
+          inverse,
+        };
+        suppressMapClick.current = true;
+        svg.setPointerCapture(firstId);
+        svg.setPointerCapture(secondId);
+      } else if (event.target === svg) {
+        const startPoint = mapPointFromClient(svg, event.clientX, event.clientY, inverse);
+        if (!startPoint) return;
+        viewGesture.current = {
+          kind: 'pan-candidate',
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startPoint,
+          startViewport: visibleViewport,
+          inverse,
+        };
+        svg.setPointerCapture(event.pointerId);
+      }
+      return;
+    }
+
+    if (event.button !== 0 || event.target !== svg) return;
+    const startPoint = mapPointFromClient(svg, event.clientX, event.clientY, inverse);
+    if (!startPoint) return;
+    viewGesture.current = {
+      kind: 'pan-candidate',
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPoint,
+      startViewport: visibleViewport,
+      inverse,
+    };
+    svg.setPointerCapture(event.pointerId);
+  }
+
+  function handleSvgPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    const pointer = pointerPositions.current.get(event.pointerId);
+    if (pointer?.pointerType === 'touch') {
+      pointerPositions.current.set(event.pointerId, {
+        ...pointer,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
+    }
+
+    const gesture = viewGesture.current;
+    if (!gesture) return;
+    const svg = event.currentTarget;
+    if (gesture.kind === 'pinch') {
+      if (!gesture.pointerIds.includes(event.pointerId)) return;
+      const first = pointerPositions.current.get(gesture.pointerIds[0]);
+      const second = pointerPositions.current.get(gesture.pointerIds[1]);
+      if (!first || !second) return;
+      const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      const requestedScale = distance / gesture.startDistance;
+      const nextWidth = Math.min(
+        bounds.width * 4,
+        Math.max(bounds.width / 12, gesture.startViewport.width / requestedScale),
+      );
+      const scale = gesture.startViewport.width / nextWidth;
+      const midpoint = mapPointFromClient(
+        svg,
+        (first.clientX + second.clientX) / 2,
+        (first.clientY + second.clientY) / 2,
+        gesture.inverse,
+      );
+      if (!midpoint) return;
+      setViewport({
+        minX: gesture.startMidpoint.x - (midpoint.x - gesture.startViewport.minX) / scale,
+        minY: gesture.startMidpoint.y - (midpoint.y - gesture.startViewport.minY) / scale,
+        width: nextWidth,
+        height: gesture.startViewport.height / scale,
+      });
+      return;
+    }
+
+    if (gesture.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - gesture.startClientX;
+    const deltaY = event.clientY - gesture.startClientY;
+    if (gesture.kind === 'pan-candidate' && Math.hypot(deltaX, deltaY) < 4) return;
+    if (gesture.kind === 'pan-candidate') {
+      viewGesture.current = { ...gesture, kind: 'pan' };
+      suppressMapClick.current = true;
+    }
+    const currentPoint = mapPointFromClient(svg, event.clientX, event.clientY, gesture.inverse);
+    if (!currentPoint) return;
+    setViewport({
+      ...gesture.startViewport,
+      minX: gesture.startViewport.minX - (currentPoint.x - gesture.startPoint.x),
+      minY: gesture.startViewport.minY - (currentPoint.y - gesture.startPoint.y),
+    });
+  }
+
+  function endSvgPointer(event: React.PointerEvent<SVGSVGElement>) {
+    pointerPositions.current.delete(event.pointerId);
+    const gesture = viewGesture.current;
+    if (!gesture) return;
+    if (gesture.kind === 'pinch' && gesture.pointerIds.includes(event.pointerId)) {
+      viewGesture.current = null;
+    } else if (gesture.kind !== 'pinch' && gesture.pointerId === event.pointerId) {
+      viewGesture.current = null;
+    }
+  }
+
+  function handleSvgClickCapture(event: React.MouseEvent<SVGSVGElement>) {
+    if (!suppressMapClick.current) return;
+    suppressMapClick.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleSvgWheel(event: React.WheelEvent<SVGSVGElement>) {
+    if (mode !== 'idle') return;
+    const point = mapPointFromClient(event.currentTarget, event.clientX, event.clientY);
+    if (!point) return;
+    event.preventDefault();
+    zoomMap(Math.exp(Math.max(-2, Math.min(2, event.deltaY * 0.002))), point);
+  }
+
+  function handleSvgKeyDown(event: React.KeyboardEvent<SVGSVGElement>) {
+    if (mode !== 'idle' || event.target !== event.currentTarget) return;
+    const currentView = viewport ?? bounds;
+    const stepX = currentView.width * 0.1;
+    const stepY = currentView.height * 0.1;
+    if (event.key === 'ArrowLeft') setViewport({ ...currentView, minX: currentView.minX - stepX });
+    else if (event.key === 'ArrowRight') setViewport({ ...currentView, minX: currentView.minX + stepX });
+    else if (event.key === 'ArrowUp') setViewport({ ...currentView, minY: currentView.minY - stepY });
+    else if (event.key === 'ArrowDown') setViewport({ ...currentView, minY: currentView.minY + stepY });
+    else if (event.key === '+' || event.key === '=') zoomMap(0.8);
+    else if (event.key === '-') zoomMap(1.25);
+    else if (event.key === 'Home') setViewport(null);
+    else return;
+    event.preventDefault();
+  }
 
   function circuitLabel(circuitId: number): string {
     const circuit = circuits.find((c) => c.id === circuitId);
@@ -315,6 +587,7 @@ export function FloorplanView({
     setSelectedRoomId(null);
     setSelectedCircuitId(point.circuit_id);
     setDraftPoint(null);
+    focusMapBounds({ minX: point.x, minY: point.y, width: 0, height: 0 });
   }
 
   function beginEdit(move: boolean) {
@@ -331,6 +604,7 @@ export function FloorplanView({
     setSelectedPointId(null);
     setSelectedRoomId(null);
     setSelectedCircuitId(null);
+    setViewport(null);
     setFloor(nextFloor);
   }
 
@@ -348,6 +622,7 @@ export function FloorplanView({
       x: String(x),
       y: String(y),
     });
+    if (roomFloor !== floor) setViewport(null);
     setFloor(roomFloor);
     setSelectedPointId(null);
     setSelectedRoomId(null);
@@ -361,6 +636,7 @@ export function FloorplanView({
     setSelectedRoomId(room.id);
     setSelectedPointId(null);
     setDraftPoint(null);
+    focusMapBounds(boundsForPoints(room.polygon));
   }
 
   function startRoomEdit(room: Room) {
@@ -382,7 +658,10 @@ export function FloorplanView({
   }
 
   function changeRoomDraft(change: Partial<RoomDraft>) {
-    if (change.floor != null) setFloor(change.floor);
+    if (change.floor != null) {
+      if (change.floor !== floor) setViewport(null);
+      setFloor(change.floor);
+    }
     setRoomDraft((current) => (current ? { ...current, ...change } : current));
   }
 
@@ -611,7 +890,6 @@ export function FloorplanView({
               {mode === 'walk' ? 'Finish circuit walk' : 'Walk circuit'}
             </button>
           </div>
-
           {displayedRooms.length === 0 && !roomDraft ? (
             <div>
               {selectedCircuit ? (
@@ -626,135 +904,163 @@ export function FloorplanView({
               <button type="button" onClick={onOpenRooms}>Add a measured or irregular room</button>
             </div>
           ) : (
-            <svg
-              ref={svgRef}
-              viewBox={`${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`}
-              className="floorplan-svg"
-              onClick={handleSvgClick}
-            >
-              <title>{`Floorplan for ${floor}`}</title>
-              {displayedRooms.map((room) => {
-                const [cx, cy] = centroid(room.polygon);
-                const label = roomLabelLayout(room.name, room.polygon);
-                const points = room.polygon.map(([x, y]) => `${x},${y}`).join(' ');
-                const isSelected = room.id === selectedRoomId;
-                return (
-                  <g
-                    key={room.id}
-                    role="button"
-                    tabIndex={mode === 'idle' ? 0 : -1}
-                    aria-label={`Room: ${room.name}`}
-                    aria-pressed={isSelected}
-                    onClick={(event) => {
-                      if (mode !== 'idle') return;
-                      event.stopPropagation();
-                      selectRoom(room);
-                    }}
-                    onKeyDown={(event) => {
-                      if (mode !== 'idle' || (event.key !== 'Enter' && event.key !== ' ')) return;
-                      event.preventDefault();
-                      selectRoom(room);
-                    }}
-                  >
-                    <clipPath id={`room-label-clip-${room.id}`}>
-                      <polygon points={points} />
-                    </clipPath>
-                    <polygon
-                      points={points}
-                      className={`room-polygon${isSelected ? ' selected-room' : ''}`}
-                    />
-                    <text
-                      className="room-label"
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      clipPath={`url(#room-label-clip-${room.id})`}
-                      style={{ fontSize: label.fontSize }}
-                    >
-                      {label.lines.map((line, index) => (
-                        <tspan
-                          key={`${line}-${index}`}
-                          x={cx}
-                          y={cy + (index - (label.lines.length - 1) / 2) * label.lineHeight}
-                        >
-                          {line}{index < label.lines.length - 1 ? ' ' : ''}
-                        </tspan>
-                      ))}
-                    </text>
-                  </g>
-                );
-              })}
-              {draftPolygon && (
-                <polygon
-                  points={draftPolygon.map(([x, y]) => `${x},${y}`).join(' ')}
-                  className="draft-room-polygon"
-                  strokeWidth={2}
-                  strokeDasharray="8 6"
-                  vectorEffect="non-scaling-stroke"
-                  pointerEvents="none"
-                />
-              )}
-              {displayedPoints.map((storedPoint) => {
-                const point =
-                  activeEdit && storedPoint.id === selectedPointId && draftPoint
-                    ? { ...storedPoint, ...draftPoint }
-                    : storedPoint;
-                const isSelectedPoint = point.id === selectedPointId;
-                const isSelectedCircuit = point.circuit_id === selectedCircuitId;
-                return (
-                  <Fragment key={point.id}>
-                    <circle
-                      data-point-id={point.id}
-                      cx={point.x}
-                      cy={point.y}
-                      r={markerRadius}
-                      fill="transparent"
-                      stroke="transparent"
-                      strokeWidth={32}
-                      vectorEffect="non-scaling-stroke"
-                      className="point-marker"
+            <>
+              <div className="floorplan-navigation" role="group" aria-label="Floorplan navigation">
+                <button type="button" onClick={() => setViewport(null)}>
+                  Fit
+                </button>
+                <button type="button" onClick={() => zoomMap(1.25)}>
+                  Zoom out
+                </button>
+                <button type="button" onClick={() => zoomMap(0.8)}>
+                  Zoom in
+                </button>
+                <p id="floorplan-navigation-help">
+                  {mode === 'idle'
+                    ? 'Drag empty space to pan. Scroll or pinch to zoom; focus the map and use arrow keys to pan.'
+                    : 'Use Fit or the zoom controls while editing. Map gestures are reserved for your draft.'}
+                </p>
+              </div>
+              <svg
+                ref={svgRef}
+                viewBox={`${visibleViewport.minX} ${visibleViewport.minY} ${visibleViewport.width} ${visibleViewport.height}`}
+                className={`floorplan-svg${mode === 'idle' ? '' : ' editing'}`}
+                aria-label={`Floorplan map for ${floor}`}
+                aria-describedby="floorplan-navigation-help"
+                tabIndex={0}
+                onClick={handleSvgClick}
+                onClickCapture={handleSvgClickCapture}
+                onPointerDown={handleSvgPointerDown}
+                onPointerMove={handleSvgPointerMove}
+                onPointerUp={endSvgPointer}
+                onPointerCancel={endSvgPointer}
+                onWheel={handleSvgWheel}
+                onKeyDown={handleSvgKeyDown}
+              >
+                <title>{`Floorplan for ${floor}`}</title>
+                {displayedRooms.map((room) => {
+                  const [cx, cy] = centroid(room.polygon);
+                  const label = roomLabelLayout(room.name, room.polygon);
+                  const points = room.polygon.map(([x, y]) => `${x},${y}`).join(' ');
+                  const isSelected = room.id === selectedRoomId;
+                  return (
+                    <g
+                      key={room.id}
                       role="button"
-                      tabIndex={mode === 'room' ? -1 : 0}
-                      aria-pressed={isSelectedPoint}
-                      aria-label={pointAccessibleLabel(point)}
-                      onClick={(e) => {
-                        if (mode === 'room') return;
-                        e.stopPropagation();
-                        selectPoint(point);
+                      tabIndex={mode === 'idle' ? 0 : -1}
+                      aria-label={`Room: ${room.name}`}
+                      aria-pressed={isSelected}
+                      onClick={(event) => {
+                        if (mode !== 'idle') return;
+                        event.stopPropagation();
+                        selectRoom(room);
                       }}
-                      onKeyDown={(e) => {
-                        if (mode === 'room' || (e.key !== 'Enter' && e.key !== ' ')) return;
-                        e.preventDefault();
-                        selectPoint(point);
+                      onKeyDown={(event) => {
+                        if (mode !== 'idle' || (event.key !== 'Enter' && event.key !== ' ')) return;
+                        event.preventDefault();
+                        selectRoom(room);
                       }}
                     >
-                      <title>{pointAccessibleLabel(point)}</title>
-                    </circle>
-                    <circle
-                      cx={point.x}
-                      cy={point.y}
-                      r={markerRadius}
-                      fill={colorForKind(point.kind)}
-                      stroke={isSelectedCircuit ? '#f97316' : '#fff'}
-                      strokeWidth={isSelectedPoint ? 3 : 2}
-                      vectorEffect="non-scaling-stroke"
-                      className="point-symbol"
-                      pointerEvents="none"
-                    />
-                  </Fragment>
-                );
-              })}
-              {draftPoint && !activeEdit && (
-                <circle
-                  cx={draftPoint.x}
-                  cy={draftPoint.y}
-                  r={2}
-                  fill="none"
-                  stroke="#f97316"
-                  strokeWidth={0.5}
-                  pointerEvents="none"
-                />
-              )}
-            </svg>
+                      <clipPath id={`room-label-clip-${room.id}`}>
+                        <polygon points={points} />
+                      </clipPath>
+                      <polygon
+                        points={points}
+                        className={`room-polygon${isSelected ? ' selected-room' : ''}`}
+                      />
+                      <text
+                        className="room-label"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        clipPath={`url(#room-label-clip-${room.id})`}
+                        style={{ fontSize: label.fontSize }}
+                      >
+                        {label.lines.map((line, index) => (
+                          <tspan
+                            key={`${line}-${index}`}
+                            x={cx}
+                            y={cy + (index - (label.lines.length - 1) / 2) * label.lineHeight}
+                          >
+                            {line}{index < label.lines.length - 1 ? ' ' : ''}
+                          </tspan>
+                        ))}
+                      </text>
+                    </g>
+                  );
+                })}
+                {draftPolygon && (
+                  <polygon
+                    points={draftPolygon.map(([x, y]) => `${x},${y}`).join(' ')}
+                    className="draft-room-polygon"
+                    strokeWidth={2}
+                    strokeDasharray="8 6"
+                    vectorEffect="non-scaling-stroke"
+                    pointerEvents="none"
+                  />
+                )}
+                {displayedPoints.map((storedPoint) => {
+                  const point =
+                    activeEdit && storedPoint.id === selectedPointId && draftPoint
+                      ? { ...storedPoint, ...draftPoint }
+                      : storedPoint;
+                  const isSelectedPoint = point.id === selectedPointId;
+                  const isSelectedCircuit = point.circuit_id === selectedCircuitId;
+                  return (
+                    <Fragment key={point.id}>
+                      <circle
+                        data-point-id={point.id}
+                        cx={point.x}
+                        cy={point.y}
+                        r={markerRadius}
+                        fill="transparent"
+                        stroke="transparent"
+                        strokeWidth={32}
+                        vectorEffect="non-scaling-stroke"
+                        className="point-marker"
+                        role="button"
+                        tabIndex={mode === 'room' ? -1 : 0}
+                        aria-pressed={isSelectedPoint}
+                        aria-label={pointAccessibleLabel(point)}
+                        onClick={(e) => {
+                          if (mode === 'room') return;
+                          e.stopPropagation();
+                          selectPoint(point);
+                        }}
+                        onKeyDown={(e) => {
+                          if (mode === 'room' || (e.key !== 'Enter' && e.key !== ' ')) return;
+                          e.preventDefault();
+                          selectPoint(point);
+                        }}
+                      >
+                        <title>{pointAccessibleLabel(point)}</title>
+                      </circle>
+                      <circle
+                        cx={point.x}
+                        cy={point.y}
+                        r={markerRadius}
+                        fill={colorForKind(point.kind)}
+                        stroke={isSelectedCircuit ? '#f97316' : '#fff'}
+                        strokeWidth={isSelectedPoint ? 3 : 2}
+                        vectorEffect="non-scaling-stroke"
+                        className="point-symbol"
+                        pointerEvents="none"
+                      />
+                    </Fragment>
+                  );
+                })}
+                {draftPoint && !activeEdit && (
+                  <circle
+                    cx={draftPoint.x}
+                    cy={draftPoint.y}
+                    r={2}
+                    fill="none"
+                    stroke="#f97316"
+                    strokeWidth={0.5}
+                    pointerEvents="none"
+                  />
+                )}
+              </svg>
+            </>
           )}
         </div>
 
@@ -896,6 +1202,14 @@ export function FloorplanView({
                               onClick={() => {
                                 setSelectedCircuitId(circuit.id);
                                 setSelectedPointId(null);
+                                const circuitPoints = displayedPoints.filter(
+                                  (point) => point.circuit_id === circuit.id,
+                                );
+                                if (circuitPoints.length > 0) {
+                                  focusMapBounds(
+                                    boundsForPoints(circuitPoints.map(({ x, y }) => [x, y])),
+                                  );
+                                }
                               }}
                             >
                               Breaker {circuit.breaker_label}
