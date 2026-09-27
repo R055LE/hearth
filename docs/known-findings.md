@@ -5,20 +5,19 @@ This is dated evidence, not a promise that the image stays empty.
 
 ## Measured baseline
 
-Measured 2026-09-18 from the application image built against Python runtime
-release [`e3ec311769752a59`](https://github.com/R055LE/runtime-images/releases/tag/python-3.14-e3ec311769752a59):
+Measured 2026-09-26 from the application image built against Python runtime
+release [`ae1c7cac57e503c6`](https://github.com/R055LE/runtime-images/releases/tag/python-3.14-ae1c7cac57e503c6):
 
 - runtime digest:
-  `sha256:5f877edcd076bbcfc2f5b1fbd49f98ad469676cadf6d030279f01b875fc7bb91`
+  `sha256:701fe2f37680aba7fd87e02f2ade6cfccdd42eb0ede056aacb8b49bbacab0bc1`
 - build digest:
-  `sha256:a5a6835b51b829772c977f85110976cfc12fb2a20ea6cb8ea34fdd05df95f767`
-- runtime packages: 26
-- build packages: 50
+- runtime packages: 31
+- build packages: 55
 - scanned local application image ID:
-  `sha256:5178d6fb2a1a1b6b1525348304eefa0acef8b5777d74ca6d6d31aff36cc1ea91`
+  `sha256:e5e2e68c278e16e41bcb897116381882782bab266767124539f676788876f5c8`
 - complete application image: zero HIGH or CRITICAL findings across the Wolfi
   and Python package inventories, scanned with Trivy 0.74.0 and a vulnerability
-  database updated 2026-09-18T07:09Z; the fixable-finding gate also passed
+  database updated 2026-09-26T19:03Z; the fixable-finding gate also passed
 
 The prior distroless baseline had 15 HIGH findings across five CVEs. Moving to
 the owned runtime removed those affected Debian Python, ncurses, and OpenSSL
