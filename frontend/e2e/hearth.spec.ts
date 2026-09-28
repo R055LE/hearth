@@ -434,6 +434,11 @@ async function clickFloorplan(page: Page, xRatio: number, yRatio: number) {
 }
 
 async function clickFloorplanCoordinate(page: Page, x: number, y: number) {
+  const point = await floorplanScreenPoint(page, x, y);
+  await page.mouse.click(point.x, point.y);
+}
+
+async function floorplanScreenPoint(page: Page, x: number, y: number) {
   const floorplan = page.locator('.floorplan-svg');
   const point = await floorplan.evaluate((svg, coordinates) => {
     const mapPoint = svg.createSVGPoint();
@@ -442,7 +447,7 @@ async function clickFloorplanCoordinate(page: Page, x: number, y: number) {
     const screenPoint = mapPoint.matrixTransform(svg.getScreenCTM()!);
     return { x: screenPoint.x, y: screenPoint.y };
   }, { x, y });
-  await page.mouse.click(point.x, point.y);
+  return point;
 }
 
 async function floorplanViewBox(page: Page): Promise<number[]> {
@@ -1960,6 +1965,176 @@ test('creates, previews, positions, and cancels rooms on the phone floorplan', a
   const livingMinX = Math.min(...(state.createdRooms[1].polygon as number[][]).map(([x]) => x));
   expect(livingMinX).toBeGreaterThan(kitchenMaxX);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('draws a rectangle on an empty floor and saves exact corrected dimensions', async ({ page }) => {
+  const state = await mockApi(page, { rooms: [], points: [] });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  let form = page.getByRole('form', { name: 'Add room' });
+  const start = await floorplanScreenPoint(page, 2, 2);
+  const end = await floorplanScreenPoint(page, 8, 7);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.mouse.up();
+  await expect(form.getByRole('spinbutton', { name: 'Room length in feet' })).toHaveValue('6');
+  await expect(form.getByRole('spinbutton', { name: 'Room width in feet' })).toHaveValue('5');
+  await expect(page.locator('.draft-room-polygon')).toHaveAttribute('points', '2,2 8,2 8,7 2,7');
+  expect(state.createdRooms).toEqual([]);
+  await form.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('.draft-room-polygon')).not.toBeVisible();
+  expect(state.createdRooms).toEqual([]);
+
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  form = page.getByRole('form', { name: 'Add room' });
+  await form.getByRole('textbox', { name: 'Room name' }).fill('Studio');
+  const secondStart = await floorplanScreenPoint(page, 2, 2);
+  const secondEnd = await floorplanScreenPoint(page, 8, 7);
+  await page.mouse.move(secondStart.x, secondStart.y);
+  await page.mouse.down();
+  await page.mouse.move(secondEnd.x, secondEnd.y, { steps: 5 });
+  await page.mouse.up();
+  await form.getByRole('spinbutton', { name: 'Room length in feet' }).fill('7');
+  await form.getByRole('spinbutton', { name: 'Room width in feet' }).fill('4');
+  await form.getByRole('button', { name: 'Save room' }).click();
+  await expect.poll(() => state.createdRooms).toHaveLength(1);
+  expect(state.createdRooms[0]).toMatchObject({
+    name: 'Studio',
+    polygon: [[2, 2], [9, 2], [9, 6], [2, 6]],
+    measurement_source: {
+      start: { mode: 'absolute', x: 2, y: 2 },
+      walls: [{ length_in: 84 }, { length_in: 48 }, { length_in: 84 }, { length_in: 48 }],
+    },
+  });
+});
+
+test('draws beside existing rooms with touch at 390px', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  const state = await mockApi(page, { rooms: [room, adjacentRoom] });
+  await page.goto('http://127.0.0.1:4173');
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  const form = page.getByRole('form', { name: 'Add room' });
+  await form.getByRole('textbox', { name: 'Room name' }).fill('Sunroom');
+  await page.locator('.floorplan-svg').scrollIntoViewIfNeeded();
+  const start = await floorplanScreenPoint(page, 22, 1);
+  const end = await floorplanScreenPoint(page, 29, 8);
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart', touchPoints: [{ id: 1, x: start.x, y: start.y }],
+  });
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchMove', touchPoints: [{ id: 1, x: end.x, y: end.y }],
+  });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(page.locator('.room-polygon')).toHaveCount(2);
+  await expect(page.locator('.draft-room-polygon')).toHaveAttribute('points', '22,1 29,1 29,8 22,8');
+  await expect(page.locator('[data-point-id="1"]')).toHaveAttribute('cx', '12');
+  expect(state.createdRooms).toEqual([]);
+  await form.getByRole('button', { name: 'Save room' }).click();
+  await expect.poll(() => state.createdRooms).toHaveLength(1);
+  expect(state.createdRooms[0]).toMatchObject({
+    name: 'Sunroom', polygon: [[22, 1], [29, 1], [29, 8], [22, 8]],
+  });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await context.close();
+});
+
+test('resizes a room with mapped points through a handle and keeps their links', async ({ page }) => {
+  const state = await mockApi(page, { rooms: [room, adjacentRoom] });
+  await page.goto('/');
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await page.getByRole('button', { name: 'Resize room on map' }).click();
+  let form = page.getByRole('form', { name: 'Edit room' });
+  const marker = page.locator('[data-point-id="1"]');
+  const handle = page.getByRole('button', { name: 'Resize Garage draft' });
+  await expect(page.locator('.room-polygon')).toHaveCount(2);
+  await handle.scrollIntoViewIfNeeded();
+  const start = await floorplanScreenPoint(page, 20, 10);
+  const end = await floorplanScreenPoint(page, 18, 8);
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('class'), start))
+    .toBe('room-resize-hit');
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.mouse.up();
+  await expect(form.getByRole('spinbutton', { name: 'Room length in feet' })).toHaveValue('8');
+  await expect(form.getByRole('spinbutton', { name: 'Room width in feet' })).toHaveValue('8');
+  await expect(marker).toHaveAttribute('cx', '11.6');
+  await expect(marker).toHaveAttribute('cy', '1.6');
+  expect(state.updatedRoom).toBeNull();
+  await handle.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(form.getByRole('spinbutton', { name: 'Room length in feet' })).toHaveValue('8.1');
+  await form.getByRole('button', { name: 'Cancel' }).click();
+  await expect(marker).toHaveAttribute('cx', '12');
+  expect(state.updatedRoom).toBeNull();
+
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await page.getByRole('button', { name: 'Resize room on map' }).click();
+  form = page.getByRole('form', { name: 'Edit room' });
+  await page.getByRole('button', { name: 'Resize Garage draft' }).scrollIntoViewIfNeeded();
+  const savedStart = await floorplanScreenPoint(page, 20, 10);
+  const savedEnd = await floorplanScreenPoint(page, 18, 8);
+  await page.mouse.move(savedStart.x, savedStart.y);
+  await page.mouse.down();
+  await page.mouse.move(savedEnd.x, savedEnd.y, { steps: 5 });
+  await page.mouse.up();
+  await form.getByRole('button', { name: 'Save room' }).click();
+  await expect.poll(() => state.updatedRoom).not.toBeNull();
+  expect(state.updatedRoom).toMatchObject({
+    polygon: [[10, 0], [18, 0], [18, 8], [10, 8]],
+    measurement_source: { walls: [{ length_in: 96 }, { length_in: 96 }, { length_in: 96 }, { length_in: 96 }] },
+  });
+  await expect(marker).toHaveAttribute('cx', '11.6');
+  await expect(marker).toHaveAttribute('cy', '1.6');
+  await page.reload();
+  await expect(marker).toHaveAttribute('cx', '11.6');
+  await marker.click();
+  await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('Garage');
+  await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('breaker 1');
+});
+
+test('keeps invalid and failed resize drafts recoverable at 390px', async ({ page }) => {
+  const state = await mockApi(page, { failRoomSave: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await page.getByRole('button', { name: 'Resize room on map' }).click();
+  const form = page.getByRole('form', { name: 'Edit room' });
+  await form.getByRole('spinbutton', { name: 'Room length in feet' }).fill('0');
+  await expect(form.getByRole('alert')).toContainText('positive length and width');
+  await expect(form.getByRole('button', { name: 'Save room' })).toBeDisabled();
+  expect(state.updatedRoom).toBeNull();
+  await form.getByRole('spinbutton', { name: 'Room length in feet' }).fill('10');
+  await form.getByText('Fine position (optional)').click();
+  await form.getByRole('spinbutton', { name: 'Room X position in feet' }).fill('');
+  await expect(form.getByRole('button', { name: 'Save room' })).toBeDisabled();
+  await form.getByRole('spinbutton', { name: 'Room X position in feet' }).fill('10');
+  await form.getByRole('spinbutton', { name: 'Room length in feet' }).fill('8');
+  await form.getByRole('spinbutton', { name: 'Room width in feet' }).fill('7');
+  await expect(page.locator('[data-point-id="1"]')).toHaveAttribute('cx', '11.6');
+  await form.getByRole('button', { name: 'Save room' }).click();
+  await expect(page.getByText(/Failed to save room.*Room could not be saved/)).toBeVisible();
+  await expect(form.getByRole('spinbutton', { name: 'Room length in feet' })).toHaveValue('8');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await form.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('[data-point-id="1"]')).toHaveAttribute('cx', '12');
+});
+
+test('keeps measured rectangles on the geometry editor path', async ({ page }) => {
+  await mockApi(page, {
+    rooms: [{ ...room, measurement_source: {
+      ...room.measurement_source,
+      start: { ...room.measurement_source.start, heading_deg: 90 },
+    } }],
+  });
+  await page.goto('/');
+  await page.locator('g[aria-label="Room: Garage"]').click();
+  await expect(page.getByRole('button', { name: 'Resize room on map' })).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit room on map' })).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open geometry editor' })).toBeVisible();
 });
 
 test('edits a rectangle on the map and previews mapped-point movement before save', async ({ page }) => {
