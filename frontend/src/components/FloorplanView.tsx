@@ -33,6 +33,17 @@ type RoomDrag = {
   inverse: DOMMatrix;
   moved: boolean;
 };
+type RoomShapeGesture = {
+  kind: 'draw' | 'resize';
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startPoint: { x: number; y: number };
+  startRectangle: AxisAlignedRectangle;
+  startViewport: Viewport | null;
+  inverse: DOMMatrix;
+  moved: boolean;
+};
 type ViewGesture =
   | {
       kind: 'pan-candidate' | 'pan';
@@ -53,6 +64,7 @@ type ViewGesture =
     };
 
 function rectangleFromDraft(draft: RoomDraft): AxisAlignedRectangle | null {
+  if ([draft.x, draft.y, draft.length, draft.width].some((value) => value.trim() === '')) return null;
   const rectangle = {
     x: Number(draft.x),
     y: Number(draft.y),
@@ -64,6 +76,10 @@ function rectangleFromDraft(draft: RoomDraft): AxisAlignedRectangle | null {
     : null;
 }
 
+function roundTenth(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 function rectangleMeasurement(rectangle: AxisAlignedRectangle): MeasurementSource {
   const side = (feet: number) => ({ length_in: feet * 12, turn: 'right' as const });
   return {
@@ -71,6 +87,23 @@ function rectangleMeasurement(rectangle: AxisAlignedRectangle): MeasurementSourc
     start: { mode: 'absolute', x: rectangle.x, y: rectangle.y, heading_deg: 0 },
     walls: [side(rectangle.length), side(rectangle.width), side(rectangle.length), side(rectangle.width)],
   };
+}
+
+function editableRectangle(room: Room): AxisAlignedRectangle | null {
+  const rectangle = axisAlignedRectangle(room.polygon);
+  if (!rectangle || !room.measurement_source) return rectangle;
+  const source = room.measurement_source;
+  const expected = rectangleMeasurement(rectangle);
+  if (
+    source.start.mode !== 'absolute' ||
+    Math.abs(source.start.x - rectangle.x) > 1e-6 ||
+    Math.abs(source.start.y - rectangle.y) > 1e-6 ||
+    Math.abs(source.start.heading_deg) > 1e-6 ||
+    source.walls.length !== 4
+  ) return null;
+  return source.walls.every((wall, index) =>
+    wall.turn === 'right' && Math.abs(wall.length_in - expected.walls[index].length_in) <= 1e-6,
+  ) ? rectangle : null;
 }
 
 function getSvgPoint(svg: SVGSVGElement, evt: React.MouseEvent): { x: number; y: number } {
@@ -241,6 +274,7 @@ export function FloorplanView({
   const [mode, setMode] = useState<InteractionMode>(initialWalking ? 'walk' : 'idle');
   const [draftPoint, setDraftPoint] = useState<PointDraft | null>(null);
   const [roomDraft, setRoomDraft] = useState<RoomDraft | null>(null);
+  const [resizingRoom, setResizingRoom] = useState(false);
   const [walkCircuitId, setWalkCircuitId] = useState<number | ''>(initialWalking ? initialCircuitId ?? '' : '');
   const [walkKind, setWalkKind] = useState('outlet');
   const [walkCreatedIds, setWalkCreatedIds] = useState<number[]>([]);
@@ -259,6 +293,7 @@ export function FloorplanView({
   const pointerPositions = useRef(new Map<number, PointerPosition>());
   const viewGesture = useRef<ViewGesture | null>(null);
   const roomDrag = useRef<RoomDrag | null>(null);
+  const roomShape = useRef<RoomShapeGesture | null>(null);
   const roomPlacement = useRef<{ pointerId: number; startClientX: number; startClientY: number } | null>(null);
   const suppressMapClick = useRef(false);
 
@@ -441,9 +476,28 @@ export function FloorplanView({
   function handleSvgPointerDown(event: React.PointerEvent<SVGSVGElement>) {
     if (mode === 'room') {
       if (event.pointerType === 'mouse' && event.button !== 0) return;
-      if (!roomDrag.current && !roomPlacement.current) suppressMapClick.current = false;
+      if (saving || roomDrag.current || roomShape.current || roomPlacement.current) return;
+      suppressMapClick.current = false;
       const svg = event.currentTarget;
-      if (roomDraft?.roomId != null &&
+      if (roomDraft && (roomDraft.roomId == null ||
+        (resizingRoom && (event.target as SVGElement).classList.contains('room-resize-hit')))) {
+        const inverse = svg.getScreenCTM()?.inverse();
+        const startPoint = mapPointFromClient(svg, event.clientX, event.clientY, inverse);
+        const startRectangle = rectangleFromDraft(roomDraft);
+        if (!inverse || !startPoint || !startRectangle) return;
+        roomShape.current = {
+          kind: roomDraft.roomId == null ? 'draw' : 'resize',
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startPoint,
+          startRectangle,
+          startViewport: viewport,
+          inverse,
+          moved: false,
+        };
+        if (viewport === null) setViewport(visibleViewport);
+      } else if (!resizingRoom && roomDraft?.roomId != null &&
         (event.target as SVGElement).classList.contains('draft-room-polygon')) {
         const inverse = svg.getScreenCTM()?.inverse();
         const startPoint = mapPointFromClient(svg, event.clientX, event.clientY, inverse);
@@ -539,6 +593,30 @@ export function FloorplanView({
   }
 
   function handleSvgPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    const shape = roomShape.current;
+    if (shape?.pointerId === event.pointerId) {
+      if (!shape.moved && Math.hypot(
+        event.clientX - shape.startClientX,
+        event.clientY - shape.startClientY,
+      ) < 4) return;
+      shape.moved = true;
+      const point = mapPointFromClient(event.currentTarget, event.clientX, event.clientY, shape.inverse);
+      if (!point) return;
+      if (shape.kind === 'draw') {
+        changeRoomDraft({
+          x: String(roundTenth(Math.min(shape.startPoint.x, point.x))),
+          y: String(roundTenth(Math.min(shape.startPoint.y, point.y))),
+          length: String(Math.max(0.1, roundTenth(Math.abs(point.x - shape.startPoint.x)))),
+          width: String(Math.max(0.1, roundTenth(Math.abs(point.y - shape.startPoint.y)))),
+        });
+      } else {
+        changeRoomDraft({
+          length: String(Math.max(0.1, roundTenth(point.x - shape.startRectangle.x))),
+          width: String(Math.max(0.1, roundTenth(point.y - shape.startRectangle.y))),
+        });
+      }
+      return;
+    }
     const drag = roomDrag.current;
     if (drag?.pointerId === event.pointerId) {
       if (!drag.moved && Math.hypot(
@@ -620,6 +698,21 @@ export function FloorplanView({
   }
 
   function endSvgPointer(event: React.PointerEvent<SVGSVGElement>) {
+    const shape = roomShape.current;
+    if (shape?.pointerId === event.pointerId) {
+      if (event.type === 'pointercancel') {
+        changeRoomDraft({
+          x: String(shape.startRectangle.x),
+          y: String(shape.startRectangle.y),
+          length: String(shape.startRectangle.length),
+          width: String(shape.startRectangle.width),
+        });
+      }
+      if (shape.moved) suppressMapClick.current = true;
+      if (shape.startViewport === null) setViewport(null);
+      roomShape.current = null;
+      return;
+    }
     const drag = roomDrag.current;
     if (drag?.pointerId === event.pointerId) {
       if (event.type === 'pointercancel') {
@@ -683,7 +776,9 @@ export function FloorplanView({
 
   function finishInteraction() {
     roomDrag.current = null;
+    roomShape.current = null;
     roomPlacement.current = null;
+    setResizingRoom(false);
     setMode('idle');
     setDraftPoint(null);
     setRoomDraft(null);
@@ -842,6 +937,7 @@ export function FloorplanView({
       x: String(x),
       y: String(y),
     });
+    setResizingRoom(false);
     if (roomFloor !== floor) setViewport(null);
     setFloor(roomFloor);
     setSelectedPointId(null);
@@ -861,8 +957,8 @@ export function FloorplanView({
     focusMapBounds(boundsForPoints(room.polygon));
   }
 
-  function startRoomEdit(room: Room) {
-    const rectangle = axisAlignedRectangle(room.polygon);
+  function startRoomEdit(room: Room, resize = false) {
+    const rectangle = editableRectangle(room);
     if (!rectangle) return;
     setRoomDraft({
       roomId: room.id,
@@ -873,6 +969,7 @@ export function FloorplanView({
       x: String(rectangle.x),
       y: String(rectangle.y),
     });
+    setResizingRoom(resize);
     setSelectedPointId(null);
     setDraftPoint(null);
     setMode('room');
@@ -941,6 +1038,7 @@ export function FloorplanView({
     setFloor(saved.floor);
     setSelectedRoomId(saved.id);
     setRoomDraft(null);
+    setResizingRoom(false);
     setMode('idle');
     setError(null);
 
@@ -966,6 +1064,7 @@ export function FloorplanView({
 
   function handleSvgClick(evt: React.MouseEvent<SVGSVGElement>) {
     if (roomDraft && svgRef.current) {
+      if (resizingRoom) return;
       const point = getSvgPoint(svgRef.current, evt);
       changeRoomDraft({ x: String(point.x), y: String(point.y) });
       return;
@@ -1226,11 +1325,21 @@ export function FloorplanView({
                 <p id="floorplan-navigation-help">
                   {mode === 'idle'
                     ? 'Drag empty space to pan. Scroll or pinch to zoom; focus the map and use arrow keys to pan.'
-                    : roomDraft?.roomId != null
+                    : resizingRoom
+                      ? 'Drag the corner handle to resize. Use the fields for exact dimensions.'
+                      : roomDraft?.roomId != null
                       ? 'Drag the outlined room to move it. Focus it and use arrow keys to nudge; use Fit or zoom controls to navigate.'
-                      : 'Use Fit or the zoom controls while editing. Map gestures are reserved for your draft.'}
+                      : roomDraft
+                        ? 'Drag on the map to draw a rectangle, or tap to place the default size.'
+                        : 'Use Fit or the zoom controls while editing. Map gestures are reserved for your draft.'}
                 </p>
               </div>
+              {roomDraft && draftRectangle && (
+                <p className="room-draft-summary">
+                  {roomDraft.roomId == null ? 'Drag to draw' : resizingRoom ? 'Drag corner to resize' : 'Drag outline to move'} ·{' '}
+                  {draftRectangle.length} × {draftRectangle.width} ft at X {draftRectangle.x}, Y {draftRectangle.y}
+                </p>
+              )}
               <svg
                 ref={svgRef}
                 viewBox={`${visibleViewport.minX} ${visibleViewport.minY} ${visibleViewport.width} ${visibleViewport.height}`}
@@ -1305,10 +1414,10 @@ export function FloorplanView({
                     strokeWidth={2}
                     strokeDasharray="8 6"
                     vectorEffect="non-scaling-stroke"
-                    pointerEvents={roomDraft?.roomId == null ? 'none' : 'auto'}
-                    role={roomDraft?.roomId == null ? undefined : 'button'}
-                    tabIndex={roomDraft?.roomId == null ? undefined : 0}
-                    aria-label={roomDraft?.roomId == null ? undefined : `Move ${roomDraft.name} draft`}
+                    pointerEvents={roomDraft?.roomId == null || resizingRoom ? 'none' : 'auto'}
+                    role={roomDraft?.roomId == null || resizingRoom ? undefined : 'button'}
+                    tabIndex={roomDraft?.roomId == null || resizingRoom ? undefined : 0}
+                    aria-label={roomDraft?.roomId == null || resizingRoom ? undefined : `Move ${roomDraft.name} draft`}
                     onClick={(event) => event.stopPropagation()}
                     onKeyDown={(event) => {
                       if (!roomDraft || roomDraft.roomId == null) return;
@@ -1386,6 +1495,42 @@ export function FloorplanView({
                     pointerEvents="none"
                   />
                 )}
+                {resizingRoom && roomDraft?.roomId != null && draftRectangle && (
+                  <g
+                    className="room-resize-handle"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Resize ${roomDraft.name} draft`}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      const step = event.shiftKey ? 1 : 0.1;
+                      if (event.key === 'ArrowRight') changeRoomDraft({ length: String(roundTenth(draftRectangle.length + step)) });
+                      else if (event.key === 'ArrowLeft') changeRoomDraft({ length: String(Math.max(0.1, roundTenth(draftRectangle.length - step))) });
+                      else if (event.key === 'ArrowDown') changeRoomDraft({ width: String(roundTenth(draftRectangle.width + step)) });
+                      else if (event.key === 'ArrowUp') changeRoomDraft({ width: String(Math.max(0.1, roundTenth(draftRectangle.width - step))) });
+                      else return;
+                      event.preventDefault();
+                    }}
+                  >
+                    <circle
+                      cx={draftRectangle.x + draftRectangle.length}
+                      cy={draftRectangle.y + draftRectangle.width}
+                      r={markerRadius}
+                      className="room-resize-handle-visible"
+                      pointerEvents="none"
+                    />
+                    <circle
+                      cx={draftRectangle.x + draftRectangle.length}
+                      cy={draftRectangle.y + draftRectangle.width}
+                      r={markerRadius}
+                      fill="transparent"
+                      stroke="transparent"
+                      strokeWidth={44}
+                      vectorEffect="non-scaling-stroke"
+                      className="room-resize-hit"
+                    />
+                  </g>
+                )}
               </svg>
             </>
           )}
@@ -1395,6 +1540,7 @@ export function FloorplanView({
           {roomDraft ? (
             <RoomDraftForm
               draft={roomDraft}
+              resizing={resizingRoom}
               saving={saving}
               onChange={changeRoomDraft}
               onCancel={finishInteraction}
@@ -1480,10 +1626,15 @@ export function FloorplanView({
             <div className="info-card room-details" role="region" aria-label="Selected room">
               <h3>{selectedRoom.name}</h3>
               <p>Floor: {selectedRoom.floor}</p>
-              {axisAlignedRectangle(selectedRoom.polygon) ? (
-                <button type="button" onClick={() => startRoomEdit(selectedRoom)}>
-                  Edit room on map
-                </button>
+              {editableRectangle(selectedRoom) ? (
+                <div className="form-actions">
+                  <button type="button" onClick={() => startRoomEdit(selectedRoom)}>
+                    Edit room on map
+                  </button>
+                  <button type="button" onClick={() => startRoomEdit(selectedRoom, true)}>
+                    Resize room on map
+                  </button>
+                </div>
               ) : (
                 <>
                   <p>This room uses measured or irregular geometry.</p>
@@ -1610,12 +1761,14 @@ export function FloorplanView({
 
 function RoomDraftForm({
   draft,
+  resizing,
   saving,
   onChange,
   onCancel,
   onSubmit,
 }: {
   draft: RoomDraft;
+  resizing: boolean;
   saving: boolean;
   onChange: (change: Partial<RoomDraft>) => void;
   onCancel: () => void;
@@ -1635,8 +1788,10 @@ function RoomDraftForm({
       <h3>{draft.roomId == null ? 'Add room' : `Edit ${draft.name}`}</h3>
       <p className="placement-instruction">
         {draft.roomId == null
-          ? 'Tap or click the map to place the room. Saved rooms stay visible until Save.'
-          : 'Drag the outlined room or tap the map to place it. Saved rooms stay visible until Save.'}
+          ? 'Drag on the map to draw, or tap to place the default room. Saved rooms stay visible until Save.'
+          : resizing
+            ? 'Drag the corner handle to resize. Use the fields for exact size. Saved rooms stay visible until Save.'
+            : 'Drag the outlined room or tap the map to place it. Saved rooms stay visible until Save.'}
       </p>
       <label>
         Name
@@ -1683,6 +1838,7 @@ function RoomDraftForm({
           />
         </label>
       </div>
+      {!rectangle && <p role="alert">Enter positive length and width, and valid X/Y coordinates.</p>}
       <details>
         <summary>Fine position (optional)</summary>
         <div className="room-position">

@@ -228,6 +228,27 @@
   stroke: #111;
 }
 
+.room-draft-summary {
+  margin: 0.25rem 0 0.5rem;
+  font-weight: 600;
+}
+
+.room-resize-handle-visible {
+  fill: #f97316;
+  stroke: #fff;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.room-resize-hit {
+  cursor: nwse-resize;
+}
+
+.room-resize-handle:focus-visible .room-resize-handle-visible {
+  stroke: #111;
+  stroke-width: 3;
+}
+
 .anchor-room {
   stroke: #f97316;
   stroke-width: 0.6;
@@ -810,6 +831,10 @@
   }
 
   .room-authoring .floorplan-navigation {
+    display: none;
+  }
+
+  .room-authoring .room-draft-summary {
     display: none;
   }
 
