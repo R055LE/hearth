@@ -149,6 +149,7 @@ interface ApiState {
   updatedCircuit: Record<string, unknown> | null;
   updatedPanel: Record<string, unknown> | null;
   updatedPoint: Record<string, unknown> | null;
+  pointUpdates: Record<string, unknown>[];
   updatedRoom: Record<string, unknown> | null;
   updatedMaintenanceTask: Record<string, unknown> | null;
 }
@@ -160,6 +161,7 @@ async function mockApi(
     failedMaintenanceActions?: ('retire' | 'restore')[];
     failRoomRefreshAfterSave?: boolean;
     failRoomSave?: boolean;
+    failPointSave?: boolean;
     rooms?: (typeof room)[];
     points?: (typeof point)[];
     panels?: { id: number; name: string; room_id: number | null; amperage: number; fed_from_panel_id: number | null }[];
@@ -175,6 +177,7 @@ async function mockApi(
     updatedCircuit: null,
     updatedPanel: null,
     updatedPoint: null,
+    pointUpdates: [],
     updatedRoom: null,
     updatedMaintenanceTask: null,
   };
@@ -347,9 +350,14 @@ async function mockApi(
 
     const pointRoute = path.match(/^\/api\/circuit-points\/(\d+)$/);
     if (pointRoute && method === 'PATCH') {
+      if (options.failPointSave) {
+        await route.fulfill({ status: 409, json: { detail: 'Point could not be saved' } });
+        return;
+      }
       const pointId = Number(pointRoute[1]);
       const body = request.postDataJSON() as Record<string, unknown>;
       state.updatedPoint = body;
+      state.pointUpdates.push(body);
       storedPoints = storedPoints.map((stored) =>
         stored.id === pointId ? ({ ...stored, ...body } as typeof point) : stored,
       );
@@ -448,6 +456,15 @@ async function floorplanScreenPoint(page: Page, x: number, y: number) {
     return { x: screenPoint.x, y: screenPoint.y };
   }, { x, y });
   return point;
+}
+
+async function dragFloorplanCoordinate(page: Page, from: [number, number], to: [number, number]) {
+  const start = await floorplanScreenPoint(page, from[0], from[1]);
+  const end = await floorplanScreenPoint(page, to[0], to[1]);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.mouse.up();
 }
 
 async function floorplanViewBox(page: Page): Promise<number[]> {
@@ -1260,6 +1277,143 @@ test('edits point details and moves the preview before saving', async ({ page })
     x: expectedX,
     y: expectedY,
   });
+});
+
+test('drags a selected point as a draft, then cancels and saves once', async ({ page }) => {
+  const state = await mockApi(page);
+  await page.goto('/');
+  const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
+  await marker.click();
+  await page.getByRole('button', { name: 'Move point', exact: true }).click();
+  await dragFloorplanCoordinate(page, [12, 2], [16, 4]);
+  await expect(marker).toHaveAttribute('cx', '16');
+  await expect(marker).toHaveAttribute('cy', '4');
+  await expect(page.getByRole('spinbutton', { name: 'X:' })).toHaveValue('16');
+  expect(state.pointUpdates).toEqual([]);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(marker).toHaveAttribute('cx', '12');
+  expect(state.pointUpdates).toEqual([]);
+
+  await page.getByRole('button', { name: 'Move point', exact: true }).click();
+  await dragFloorplanCoordinate(page, [12, 2], [16, 4]);
+  await page.getByRole('button', { name: 'Save point' }).click();
+  await expect.poll(() => state.pointUpdates).toHaveLength(1);
+  expect(state.pointUpdates[0]).toMatchObject({ x: 16, y: 4, room_id: 1, circuit_id: 1 });
+  await page.reload();
+  await expect(marker).toHaveAttribute('cx', '16');
+  await marker.click();
+  await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('breaker 1');
+});
+
+test('offers a named chooser when point hit areas overlap at 390px', async ({ page }) => {
+  const state = await mockApi(page, {
+    points: [point, { ...point, id: 2, x: 12.1, y: 2.1, label: 'Nearby outlet' }],
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await clickFloorplanCoordinate(page, 12.1, 2.1);
+  const chooser = page.getByRole('group', { name: 'Choose mapped point' });
+  await expect(chooser).toBeVisible();
+  await expect(chooser).toBeFocused();
+  await expect(chooser.getByRole('button', { name: /North wall outlet.*Garage/ })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: /Nearby outlet.*Garage/ })).toBeVisible();
+  expect(state.pointUpdates).toEqual([]);
+  await chooser.getByRole('button', { name: /North wall outlet.*Garage/ }).click();
+  await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('North wall outlet');
+  await expect(chooser).not.toBeVisible();
+  await page.locator('.floorplan-svg').scrollIntoViewIfNeeded();
+  await clickFloorplanCoordinate(page, 12.1, 2.1);
+  await expect(chooser).toBeVisible();
+  await clickFloorplanCoordinate(page, 18, 8);
+  await expect(chooser).not.toBeVisible();
+  await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Garage');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('moves an overlapped selected point across rooms and supports keyboard correction', async ({ page }) => {
+  const state = await mockApi(page, {
+    rooms: [adjacentRoom, room],
+    points: [point, { ...point, id: 2, x: 12.1, y: 2.1, label: 'Nearby outlet' }],
+  });
+  await page.goto('/');
+  const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
+  await marker.focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Move point', exact: true }).click();
+  const start = await floorplanScreenPoint(page, 12, 2);
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('data-point-id'), start)).toBe('1');
+  await dragFloorplanCoordinate(page, [12, 2], [8, 2]);
+  await expect(marker).toHaveAttribute('cx', '8');
+  await expect(page.getByRole('combobox', { name: 'Room:' })).toHaveValue('2');
+  await marker.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  await expect(marker).toHaveAttribute('cx', '8.1');
+  await expect(marker).toHaveAttribute('cy', '3');
+  expect(state.pointUpdates).toEqual([]);
+  await page.getByRole('button', { name: 'Save point' }).click();
+  await expect.poll(() => state.pointUpdates).toHaveLength(1);
+  expect(state.pointUpdates[0]).toMatchObject({ room_id: 2, x: 8.1, y: 3, circuit_id: 1 });
+  await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('Kitchen');
+  await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('breaker 1');
+});
+
+test('keeps invalid and failed point moves recoverable, with tap and numeric fallback', async ({ page }) => {
+  const state = await mockApi(page, { failPointSave: true });
+  await page.goto('/');
+  const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
+  await marker.click();
+  await page.getByRole('button', { name: 'Move point', exact: true }).click();
+  await dragFloorplanCoordinate(page, [15, 5], [17, 7]);
+  await expect(marker).toHaveAttribute('cx', '12');
+  await clickFloorplanCoordinate(page, 9.5, 2);
+  await expect(marker).toHaveAttribute('cx', '9.5');
+  await expect(page.getByRole('alert')).toContainText('inside a room');
+  await expect(page.getByRole('button', { name: 'Save point' })).toBeDisabled();
+  expect(state.pointUpdates).toEqual([]);
+  await page.getByRole('spinbutton', { name: 'X:' }).fill('15');
+  await expect(page.getByRole('button', { name: 'Save point' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Save point' }).click();
+  await expect(page.getByText('Point could not be saved')).toBeVisible();
+  await expect(marker).toHaveAttribute('cx', '15');
+  expect(state.pointUpdates).toEqual([]);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(marker).toHaveAttribute('cx', '12');
+
+  await page.getByRole('button', { name: 'Move point', exact: true }).click();
+  await clickFloorplanCoordinate(page, 16, 3);
+  await page.getByRole('button', { name: 'Rooms', exact: true }).click();
+  await page.getByRole('button', { name: 'Floorplan', exact: true }).click();
+  await expect(marker).toHaveAttribute('cx', '12');
+  expect(state.pointUpdates).toEqual([]);
+});
+
+test('drags a point by touch at 390px without horizontal overflow', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  const state = await mockApi(page, { rooms: [room, adjacentRoom] });
+  await page.goto('http://127.0.0.1:4173');
+  const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
+  await marker.click();
+  await page.getByRole('button', { name: 'Move point', exact: true }).click();
+  await marker.scrollIntoViewIfNeeded();
+  const start = await floorplanScreenPoint(page, 12, 2);
+  const end = await floorplanScreenPoint(page, 16, 3);
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart', touchPoints: [{ id: 1, x: start.x, y: start.y }],
+  });
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchMove', touchPoints: [{ id: 1, x: end.x, y: end.y }],
+  });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(marker).toHaveAttribute('cx', '16');
+  await expect(marker).toHaveAttribute('cy', '3');
+  expect(state.pointUpdates).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.getByRole('button', { name: 'Save point' }).click();
+  await expect.poll(() => state.pointUpdates).toHaveLength(1);
+  await context.close();
 });
 
 test('captures and undoes points while preserving circuit-walk defaults', async ({ page }) => {

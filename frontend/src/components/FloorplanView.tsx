@@ -4,6 +4,7 @@ import { FloorplanFinder, type FloorplanFindTarget } from './FloorplanFinder';
 import {
   axisAlignedRectangle,
   mapPointBetweenRectangles,
+  pointInPolygon,
   rectanglePolygon,
   roomContainingPoint,
   suggestedRectangleOrigin,
@@ -30,6 +31,16 @@ type RoomDrag = {
   startClientY: number;
   startPoint: { x: number; y: number };
   origin: { x: number; y: number };
+  inverse: DOMMatrix;
+  moved: boolean;
+};
+type PointDrag = {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startPoint: { x: number; y: number };
+  origin: { x: number; y: number; room_id: number };
+  startViewport: Viewport | null;
   inverse: DOMMatrix;
   moved: boolean;
 };
@@ -249,6 +260,15 @@ function pointAccessibleLabel(point: CircuitPoint): string {
   return `${point.kind}: ${point.label ?? `point ${point.id}`}`;
 }
 
+function pointDraftLocationError(draft: PointDraft, rooms: Room[]): string | null {
+  if (!Number.isFinite(draft.x) || !Number.isFinite(draft.y)) return 'Enter valid X/Y coordinates.';
+  if (!roomContainingPoint(rooms, [draft.x, draft.y])) return 'Place the point inside a room before saving.';
+  if (!rooms.some((room) => room.id === draft.room_id && pointInPolygon([draft.x, draft.y], room.polygon))) {
+    return 'Choose the room containing this point before saving.';
+  }
+  return null;
+}
+
 export function FloorplanView({
   initialCircuitId,
   initialFloor,
@@ -268,6 +288,7 @@ export function FloorplanView({
   const [plan, setPlan] = useState<Floorplan>({ rooms: [], circuit_points: [] });
   const [planFloor, setPlanFloor] = useState<string | null>(null);
   const [selectedPointId, setSelectedPointId] = useState<number | null>(null);
+  const [pointChoiceIds, setPointChoiceIds] = useState<number[] | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<number | null>(null);
   const [selectedPanelId, setSelectedPanelId] = useState<number | null>(null);
   const [selectedCircuitId, setSelectedCircuitId] = useState<number | null>(initialCircuitId ?? null);
@@ -289,12 +310,15 @@ export function FloorplanView({
   } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const pointDetailsRef = useRef<HTMLDivElement>(null);
+  const pointChoicesRef = useRef<HTMLDivElement>(null);
   const findConfirmationRef = useRef<HTMLDivElement>(null);
   const pointerPositions = useRef(new Map<number, PointerPosition>());
   const viewGesture = useRef<ViewGesture | null>(null);
   const roomDrag = useRef<RoomDrag | null>(null);
+  const pointDrag = useRef<PointDrag | null>(null);
   const roomShape = useRef<RoomShapeGesture | null>(null);
   const roomPlacement = useRef<{ pointerId: number; startClientX: number; startClientY: number } | null>(null);
+  const pointPlacement = useRef<{ pointerId: number; startClientX: number; startClientY: number } | null>(null);
   const suppressMapClick = useRef(false);
 
   function revealPointDetails() {
@@ -307,6 +331,10 @@ export function FloorplanView({
     if (mode === 'idle' && selectedPointId !== null) revealPointDetails();
     if (mode === 'move' && window.matchMedia('(max-width: 700px)').matches) returnToPoint(selectedPointId);
   }, [mode, selectedPointId]);
+
+  useEffect(() => {
+    if (pointChoiceIds) pointChoicesRef.current?.focus();
+  }, [pointChoiceIds]);
 
   function returnToPoint(pointId: number | null) {
     const marker = svgRef.current?.querySelector<SVGCircleElement>(
@@ -522,6 +550,38 @@ export function FloorplanView({
       svg.setPointerCapture(event.pointerId);
       return;
     }
+    if (mode === 'move') {
+      if (saving || (event.pointerType === 'mouse' && event.button !== 0)) return;
+      if (pointDrag.current || pointPlacement.current) return;
+      suppressMapClick.current = false;
+      const svg = event.currentTarget;
+      const target = event.target as SVGElement;
+      if (draftPoint && target.getAttribute('data-point-id') === String(selectedPointId)) {
+        const inverse = svg.getScreenCTM()?.inverse();
+        const startPoint = mapPointFromClient(svg, event.clientX, event.clientY, inverse);
+        if (!inverse || !startPoint) return;
+        pointDrag.current = {
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startPoint,
+          origin: { x: draftPoint.x, y: draftPoint.y, room_id: draftPoint.room_id },
+          startViewport: viewport,
+          inverse,
+          moved: false,
+        };
+        if (viewport === null) setViewport(visibleViewport);
+        svg.setPointerCapture(event.pointerId);
+      } else {
+        pointPlacement.current = {
+          pointerId: event.pointerId,
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+        };
+        if (!target.classList.contains('point-marker')) svg.setPointerCapture(event.pointerId);
+      }
+      return;
+    }
     if (mode !== 'idle') return;
     if (!viewGesture.current) suppressMapClick.current = false;
 
@@ -593,6 +653,28 @@ export function FloorplanView({
   }
 
   function handleSvgPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    const movingPoint = pointDrag.current;
+    if (movingPoint?.pointerId === event.pointerId) {
+      if (!movingPoint.moved && Math.hypot(
+        event.clientX - movingPoint.startClientX,
+        event.clientY - movingPoint.startClientY,
+      ) < 4) return;
+      movingPoint.moved = true;
+      const position = mapPointFromClient(event.currentTarget, event.clientX, event.clientY, movingPoint.inverse);
+      if (!position) return;
+      placePointDraft({
+        x: roundTenth(movingPoint.origin.x + position.x - movingPoint.startPoint.x),
+        y: roundTenth(movingPoint.origin.y + position.y - movingPoint.startPoint.y),
+      });
+      return;
+    }
+    const pointTap = pointPlacement.current;
+    if (pointTap?.pointerId === event.pointerId) {
+      if (Math.hypot(event.clientX - pointTap.startClientX, event.clientY - pointTap.startClientY) >= 4) {
+        suppressMapClick.current = true;
+      }
+      return;
+    }
     const shape = roomShape.current;
     if (shape?.pointerId === event.pointerId) {
       if (!shape.moved && Math.hypot(
@@ -698,6 +780,20 @@ export function FloorplanView({
   }
 
   function endSvgPointer(event: React.PointerEvent<SVGSVGElement>) {
+    const movingPoint = pointDrag.current;
+    if (movingPoint?.pointerId === event.pointerId) {
+      if (event.type === 'pointercancel') {
+        setDraftPoint((current) => current ? { ...current, ...movingPoint.origin } : current);
+      }
+      if (movingPoint.moved) suppressMapClick.current = true;
+      if (movingPoint.startViewport === null) setViewport(null);
+      pointDrag.current = null;
+      return;
+    }
+    if (pointPlacement.current?.pointerId === event.pointerId) {
+      pointPlacement.current = null;
+      return;
+    }
     const shape = roomShape.current;
     if (shape?.pointerId === event.pointerId) {
       if (event.type === 'pointercancel') {
@@ -776,8 +872,11 @@ export function FloorplanView({
 
   function finishInteraction() {
     roomDrag.current = null;
+    pointDrag.current = null;
     roomShape.current = null;
     roomPlacement.current = null;
+    pointPlacement.current = null;
+    setPointChoiceIds(null);
     setResizingRoom(false);
     setMode('idle');
     setDraftPoint(null);
@@ -820,6 +919,7 @@ export function FloorplanView({
 
   function selectPoint(point: CircuitPoint) {
     if (mode !== 'idle') return;
+    setPointChoiceIds(null);
     if (selectedPointId === point.id) revealPointDetails();
     setSelectedPointId(point.id);
     setSelectedRoomId(null);
@@ -829,7 +929,28 @@ export function FloorplanView({
     focusMapBounds({ minX: point.x, minY: point.y, width: 0, height: 0 });
   }
 
+  function choosePointAt(event: React.MouseEvent<SVGCircleElement>, point: CircuitPoint) {
+    if (mode !== 'idle') return;
+    const svg = svgRef.current;
+    const matrix = svg?.getScreenCTM();
+    if (!svg || !matrix) {
+      selectPoint(point);
+      return;
+    }
+    const hitRadius = markerRadius * Math.hypot(matrix.a, matrix.b) + 16;
+    const nearby = displayedPoints.filter((candidate) => {
+      const center = svg.createSVGPoint();
+      center.x = candidate.x;
+      center.y = candidate.y;
+      const screen = center.matrixTransform(matrix);
+      return Math.hypot(screen.x - event.clientX, screen.y - event.clientY) <= hitRadius;
+    });
+    if (nearby.length > 1) setPointChoiceIds(nearby.map((candidate) => candidate.id));
+    else selectPoint(point);
+  }
+
   function showFindTarget(target: FloorplanFindTarget) {
+    setPointChoiceIds(null);
     setSelectedPointId(null);
     setSelectedRoomId(null);
     setSelectedPanelId(null);
@@ -949,6 +1070,7 @@ export function FloorplanView({
 
   function selectRoom(room: Room) {
     if (mode !== 'idle') return;
+    setPointChoiceIds(null);
     setSelectedRoomId(room.id);
     setSelectedPointId(null);
     setSelectedPanelId(null);
@@ -1075,11 +1197,7 @@ export function FloorplanView({
     const point = getSvgPoint(svgRef.current, evt);
     const inferredRoom = roomContainingPoint(plan.rooms, [point.x, point.y]);
     if (mode === 'move') {
-      setDraftPoint((current) =>
-        current
-          ? { ...current, ...point, room_id: inferredRoom?.id ?? current.room_id }
-          : current,
-      );
+      placePointDraft(point);
       return;
     }
 
@@ -1101,12 +1219,26 @@ export function FloorplanView({
     });
   }
 
+  function placePointDraft(position: { x: number; y: number }) {
+    const inferredRoom = roomContainingPoint(plan.rooms, [position.x, position.y]);
+    setDraftPoint((current) => current
+      ? { ...current, ...position, room_id: inferredRoom?.id ?? current.room_id }
+      : current);
+  }
+
   function changeDraft(change: Partial<PointDraft>) {
     setDraftPoint((current) => (current ? { ...current, ...change } : current));
   }
 
   async function saveDraft(): Promise<boolean> {
     if (!draftPoint) return false;
+    const locationError = (mode === 'edit' || mode === 'move')
+      ? pointDraftLocationError(draftPoint, plan.rooms)
+      : null;
+    if (locationError) {
+      setError(locationError);
+      return false;
+    }
     setSaving(true);
     try {
       if (mode === 'edit' || mode === 'move') {
@@ -1204,6 +1336,11 @@ export function FloorplanView({
     ]);
   }
   const activeEdit = mode === 'edit' || mode === 'move';
+  const pointLocationError = activeEdit && draftPoint ? pointDraftLocationError(draftPoint, plan.rooms) : null;
+  const orderedPoints = [
+    ...displayedPoints.filter((point) => point.id !== selectedPointId),
+    ...displayedPoints.filter((point) => point.id === selectedPointId),
+  ];
   const markerRadius = Math.max(bounds.width, bounds.height) * 0.018;
 
   return (
@@ -1325,6 +1462,8 @@ export function FloorplanView({
                 <p id="floorplan-navigation-help">
                   {mode === 'idle'
                     ? 'Drag empty space to pan. Scroll or pinch to zoom; focus the map and use arrow keys to pan.'
+                    : mode === 'move'
+                      ? 'Drag the selected point or tap the map to move it. Use X/Y fields or arrow keys for exact placement.'
                     : resizingRoom
                       ? 'Drag the corner handle to resize. Use the fields for exact dimensions.'
                       : roomDraft?.roomId != null
@@ -1433,7 +1572,7 @@ export function FloorplanView({
                     }}
                   />
                 )}
-                {displayedPoints.map((storedPoint) => {
+                {orderedPoints.map((storedPoint) => {
                   const point =
                     activeEdit && storedPoint.id === selectedPointId && draftPoint
                       ? { ...storedPoint, ...draftPoint }
@@ -1451,7 +1590,7 @@ export function FloorplanView({
                         stroke="transparent"
                         strokeWidth={32}
                         vectorEffect="non-scaling-stroke"
-                        className="point-marker"
+                        className={`point-marker${mode === 'move' && isSelectedPoint ? ' point-draggable' : ''}`}
                         pointerEvents={mode === 'room' ? 'none' : undefined}
                         role="button"
                         tabIndex={mode === 'room' ? -1 : 0}
@@ -1460,9 +1599,19 @@ export function FloorplanView({
                         onClick={(e) => {
                           if (mode === 'room') return;
                           e.stopPropagation();
-                          selectPoint(point);
+                          choosePointAt(e, point);
                         }}
                         onKeyDown={(e) => {
+                          if (mode === 'move' && isSelectedPoint) {
+                            const step = e.shiftKey ? 1 : 0.1;
+                            if (e.key === 'ArrowLeft') placePointDraft({ x: roundTenth(point.x - step), y: point.y });
+                            else if (e.key === 'ArrowRight') placePointDraft({ x: roundTenth(point.x + step), y: point.y });
+                            else if (e.key === 'ArrowUp') placePointDraft({ x: point.x, y: roundTenth(point.y - step) });
+                            else if (e.key === 'ArrowDown') placePointDraft({ x: point.x, y: roundTenth(point.y + step) });
+                            else return;
+                            e.preventDefault();
+                            return;
+                          }
                           if (mode === 'room' || (e.key !== 'Enter' && e.key !== ' ')) return;
                           e.preventDefault();
                           selectPoint(point);
@@ -1532,6 +1681,24 @@ export function FloorplanView({
                   </g>
                 )}
               </svg>
+              {mode === 'idle' && pointChoiceIds && (
+                <div className="info-card point-choices" role="group" aria-label="Choose mapped point" tabIndex={-1} ref={pointChoicesRef}>
+                  <p>Several points overlap here. Choose one:</p>
+                  <div className="form-actions">
+                    {pointChoiceIds.map((id) => {
+                      const choice = displayedPoints.find((candidate) => candidate.id === id);
+                      if (!choice) return null;
+                      const roomName = plan.rooms.find((room) => room.id === choice.room_id)?.name ?? 'Unknown room';
+                      return (
+                        <button type="button" key={id} onClick={() => selectPoint(choice)}>
+                          {pointAccessibleLabel(choice)} · {roomName}
+                        </button>
+                      );
+                    })}
+                    <button type="button" onClick={() => setPointChoiceIds(null)}>Cancel</button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -1556,6 +1723,7 @@ export function FloorplanView({
               submitLabel={activeEdit ? 'Save point' : mode === 'walk' ? 'Add point' : 'Create'}
               showCircuitAndKind={mode !== 'walk'}
               moveMode={mode === 'move'}
+              locationError={pointLocationError}
               saving={saving}
               onPointChange={changeDraft}
               onMove={() => setMode('move')}
@@ -1895,6 +2063,7 @@ function PointForm({
   submitLabel,
   showCircuitAndKind,
   moveMode,
+  locationError,
   saving,
   onPointChange,
   onMove,
@@ -1909,6 +2078,7 @@ function PointForm({
   submitLabel: string;
   showCircuitAndKind: boolean;
   moveMode: boolean;
+  locationError: string | null;
   saving: boolean;
   onPointChange: (change: Partial<PointDraft>) => void;
   onMove: () => void;
@@ -1923,7 +2093,8 @@ function PointForm({
   return (
     <form className="info-card point-form" onSubmit={submit}>
       <h3>{title}</h3>
-      {moveMode && <p>Tap the floorplan to choose the new location.</p>}
+      {moveMode && <p>Drag the selected point, tap the floorplan, or edit X/Y to choose its location.</p>}
+      {locationError && <p role="alert">{locationError}</p>}
       <label>
         Room:{' '}
         <select value={point.room_id} onChange={(e) => onPointChange({ room_id: Number(e.target.value) })}>
@@ -1983,7 +2154,7 @@ function PointForm({
         />
       </label>
       <div className="form-actions">
-        <button type="submit" disabled={saving || rooms.length === 0 || circuits.length === 0}>
+        <button type="submit" disabled={saving || Boolean(locationError) || rooms.length === 0 || circuits.length === 0}>
           {saving ? 'Saving…' : submitLabel}
         </button>
         {showCircuitAndKind && !moveMode && submitLabel === 'Save point' && (
