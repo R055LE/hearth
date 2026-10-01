@@ -77,7 +77,4 @@ docker run --rm \
 echo "hearth-deploy: applying"
 docker compose up -d --wait --wait-timeout "$WAIT_SECONDS"
 
-echo "hearth-deploy: pruning superseded images"
-docker image prune -f >/dev/null
-
 echo "hearth-deploy: done"
