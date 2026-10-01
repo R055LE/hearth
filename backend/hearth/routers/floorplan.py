@@ -7,7 +7,7 @@ from hearth.database import get_db
 router = APIRouter(prefix="/floorplan", tags=["floorplan"])
 
 
-@router.get("/{floor}", response_model=schemas.FloorplanResponse)
+@router.get("/{floor:path}", response_model=schemas.FloorplanResponse)
 def get_floorplan(floor: str, db: Session = Depends(get_db)):
     rooms = db.query(models.Room).filter(models.Room.floor == floor).all()
     room_ids = [room.id for room in rooms]

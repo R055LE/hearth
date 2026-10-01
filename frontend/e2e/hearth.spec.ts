@@ -136,6 +136,7 @@ function maintenanceTask(
 }
 
 interface ApiState {
+  floorRequests: { method: string; id?: number; name?: string }[];
   completedMaintenanceTask: Record<string, unknown> | null;
   createdMaintenanceTasks: Record<string, unknown>[];
   maintenanceLifecycleRequests: {
@@ -162,12 +163,16 @@ async function mockApi(
     failRoomRefreshAfterSave?: boolean;
     failRoomSave?: boolean;
     failPointSave?: boolean;
+    failFloorSave?: boolean;
+    failFloorRemove?: boolean;
+    floors?: { id: number; name: string }[];
     rooms?: (typeof room)[];
     points?: (typeof point)[];
     panels?: { id: number; name: string; room_id: number | null; amperage: number; fed_from_panel_id: number | null }[];
   } = {},
 ): Promise<ApiState> {
   const state: ApiState = {
+    floorRequests: [],
     completedMaintenanceTask: null,
     createdMaintenanceTasks: [],
     maintenanceLifecycleRequests: [],
@@ -186,6 +191,11 @@ async function mockApi(
     completions: task.completions.map((completion) => ({ ...completion })),
   }));
   let storedRooms = (options.rooms ?? [room]).map((storedRoom) => ({ ...storedRoom }));
+  const floorNames = Array.from(new Set(storedRooms.map((storedRoom) => storedRoom.floor)));
+  if (floorNames.length === 0) floorNames.push('main');
+  let storedFloors = (options.floors ?? floorNames.map((name, index) => ({ id: index + 1, name })))
+    .map((floor) => ({ ...floor }));
+  let nextFloorId = Math.max(0, ...storedFloors.map((floor) => floor.id)) + 1;
   let storedPanels = (options.panels ?? [panel, subpanel]).map((stored) => ({ ...stored }));
   let storedCircuits = [{ ...circuit }, { ...secondCircuit }, { ...subpanelCircuit }];
   let storedPoints = (options.points ?? [point]).map((stored) => ({ ...stored }));
@@ -199,6 +209,47 @@ async function mockApi(
     const request = route.request();
     const path = new URL(request.url()).pathname;
     const method = request.method();
+
+    if (path === '/api/floors' && method === 'GET') {
+      await route.fulfill({ json: storedFloors });
+      return;
+    }
+    const floorRoute = path.match(/^\/api\/floors\/(\d+)$/);
+    if ((path === '/api/floors' && method === 'POST') || (floorRoute && method === 'PATCH')) {
+      const id = floorRoute ? Number(floorRoute[1]) : undefined;
+      const body = request.postDataJSON() as { name: string };
+      state.floorRequests.push({ method, id, name: body.name });
+      if (options.failFloorSave) {
+        await route.fulfill({ status: 503, json: { detail: 'Floor save unavailable' } });
+        return;
+      }
+      const name = body.name.trim();
+      if (storedFloors.some((floor) => floor.id !== id && floor.name.toLowerCase() === name.toLowerCase())) {
+        await route.fulfill({ status: 409, json: { detail: 'Floor name already exists' } });
+        return;
+      }
+      const saved = { id: id ?? nextFloorId++, name };
+      const previous = storedFloors.find((floor) => floor.id === id);
+      if (previous) {
+        storedRooms = storedRooms.map((storedRoom) => storedRoom.floor === previous.name
+          ? { ...storedRoom, floor: name } : storedRoom);
+        storedFloors = storedFloors.map((floor) => floor.id === id ? saved : floor);
+      } else storedFloors.push(saved);
+      await route.fulfill({ status: method === 'POST' ? 201 : 200, json: saved });
+      return;
+    }
+    if (floorRoute && method === 'DELETE') {
+      const id = Number(floorRoute[1]);
+      state.floorRequests.push({ method, id });
+      const floor = storedFloors.find((floor) => floor.id === id);
+      if (options.failFloorRemove || storedRooms.some((storedRoom) => storedRoom.floor === floor?.name)) {
+        await route.fulfill({ status: 409, json: { detail: 'Floor could not be removed' } });
+        return;
+      }
+      storedFloors = storedFloors.filter((floor) => floor.id !== id);
+      await route.fulfill({ status: 204 });
+      return;
+    }
 
     if (path === '/api/maintenance-tasks' && method === 'GET') {
       await route.fulfill({ json: storedMaintenanceTasks });
@@ -1590,7 +1641,7 @@ test('edits room metadata without opening geometry or changing mapped points', a
 
   const detailsForm = page.getByRole('form', { name: 'Edit room details for Garage' });
   await expect(detailsForm.getByRole('textbox', { name: 'Room name' })).toHaveValue('Garage');
-  await expect(detailsForm.getByRole('textbox', { name: 'Room floor' })).toHaveValue('main');
+  await expect(detailsForm.getByRole('combobox', { name: 'Room floor' })).toHaveValue('main');
   await expect(page.getByRole('group', { name: 'Placement' })).not.toBeVisible();
   await expect(page.getByRole('group', { name: 'Walls' })).not.toBeVisible();
   await expect(page.locator('.room-builder .floorplan-svg')).not.toBeVisible();
@@ -2624,3 +2675,158 @@ for (const colorScheme of ['light', 'dark'] as const) {
     });
   }
 }
+
+for (const width of [1280, 390]) {
+  test(`floor lifecycle creates a durable empty plan and accepts rooms at ${width}px`, async ({ page }) => {
+    const state = await mockApi(page);
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/');
+    await page.locator('.floor-manager summary').click();
+    await page.getByRole('button', { name: 'Add floor', exact: true }).click();
+    const form = page.locator('.floor-management-form');
+    await form.getByLabel('New floor name').fill('Discarded');
+    await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(state.floorRequests).toEqual([]);
+
+    await page.getByRole('button', { name: 'Add floor', exact: true }).click();
+    await form.getByLabel('New floor name').fill('Loft');
+    await form.getByRole('button', { name: 'Save floor' }).click();
+    await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('Loft');
+    await expect(page.locator('.floorplan-svg')).not.toBeVisible();
+    await page.reload();
+    await page.getByRole('combobox', { name: 'Floor:', exact: true }).selectOption('Loft');
+    await page.getByRole('button', { name: 'Add a rectangular room' }).click();
+    const roomForm = page.getByRole('form', { name: 'Add room', exact: true });
+    await expect(roomForm.getByRole('combobox', { name: 'Room floor' })).toHaveValue('Loft');
+    await roomForm.getByRole('textbox', { name: 'Room name' }).fill('Loft storage');
+    await roomForm.getByRole('button', { name: 'Save room', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Loft storage');
+    expect(state.createdRooms[0].floor).toBe('Loft');
+    await page.locator('.floor-manager summary').click();
+    await page.getByRole('button', { name: 'Remove floor', exact: true }).click();
+    await expect(page.getByText("Move or delete this floor's rooms before removing it.")).toBeVisible();
+    expect(state.floorRequests.filter((request) => request.method === 'DELETE')).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+
+  test(`floor lifecycle rename preserves selected point and edit context at ${width}px`, async ({ page }) => {
+    const state = await mockApi(page);
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'outlet: North wall outlet' }).click();
+    const marker = page.locator('[data-point-id="1"]');
+    const position = await marker.evaluate((element) => [element.getAttribute('cx'), element.getAttribute('cy')]);
+    await page.locator('.floor-manager summary').click();
+    await page.getByRole('button', { name: 'Rename floor', exact: true }).click();
+    const form = page.locator('.floor-management-form');
+    await form.getByLabel('Rename floor').fill('Discarded');
+    await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(state.floorRequests).toEqual([]);
+    await page.getByRole('button', { name: 'Rename floor', exact: true }).click();
+    await form.getByLabel('Rename floor').fill('Ground');
+    await form.getByRole('button', { name: 'Save floor' }).click();
+    await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('Ground');
+    await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('North wall outlet');
+    await expect(marker).toHaveAttribute('aria-pressed', 'true');
+    expect(await marker.evaluate((element) => [element.getAttribute('cx'), element.getAttribute('cy')])).toEqual(position);
+    await page.getByRole('button', { name: 'Edit point', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Rename floor', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Rooms', exact: true }).click();
+    await expect(page.getByRole('row').filter({ hasText: 'Garage' })).toContainText('Ground');
+    expect(state.updatedPoint).toBeNull();
+    expect(state.updatedRoom).toBeNull();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+}
+
+test('floor lifecycle handles blank and duplicate drafts, keyboard creation, and confirmed last-floor removal', async ({ page }) => {
+  const state = await mockApi(page, { rooms: [], points: [], panels: [], floors: [{ id: 1, name: 'main' }, { id: 2, name: 'Loft' }] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.locator('.floor-manager summary').focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Add floor', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  const form = page.locator('.floor-management-form');
+  await expect(form.getByLabel('New floor name')).toBeFocused();
+  await form.getByLabel('New floor name').fill('  ');
+  await expect(form.getByRole('button', { name: 'Save floor' })).toBeDisabled();
+  await form.getByLabel('New floor name').fill('MAIN');
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(/Floor name already exists/)).toBeVisible();
+  await expect(form.getByLabel('New floor name')).toHaveValue('MAIN');
+  await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+
+  await page.getByRole('combobox', { name: 'Floor:', exact: true }).selectOption('Loft');
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.getByRole('button', { name: 'Remove floor', exact: true }).click();
+  expect(state.floorRequests.filter((request) => request.method === 'DELETE')).toEqual([]);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Remove floor', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Remove floor', exact: true }).click();
+  await expect(page.getByText('Create a floor to start a floorplan.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add room', exact: true })).toBeDisabled();
+  await page.locator('.floor-manager').getByRole('button', { name: 'Add floor', exact: true }).click();
+  await form.getByLabel('New floor name').fill('Basement');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('Basement');
+  await page.getByRole('button', { name: 'Add a measured or irregular room' }).click();
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  await expect(page.locator('.room-builder').getByLabel('Floor:')).toHaveValue('Basement');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('floor lifecycle keeps failed rename and create drafts recoverable', async ({ page }) => {
+  await mockApi(page, { failFloorSave: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'outlet: North wall outlet' }).click();
+  await page.locator('.floor-manager summary').click();
+  const form = page.locator('.floor-management-form');
+  for (const action of ['Rename floor', 'Add floor']) {
+    await page.getByRole('button', { name: action, exact: true }).click();
+    await form.getByRole('textbox').fill('Ground');
+    await form.getByRole('button', { name: 'Save floor' }).click();
+    await expect(page.getByText(/Floor save unavailable/)).toBeVisible();
+    await expect(form.getByRole('textbox')).toHaveValue('Ground');
+    await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
+    await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('North wall outlet');
+    await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+  }
+});
+
+test('floor lifecycle keeps a floor selected after failed removal', async ({ page }) => {
+  await mockApi(page, { rooms: [], points: [], panels: [], failFloorRemove: true });
+  await page.goto('/');
+  await page.locator('.floor-manager summary').click();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Remove floor', exact: true }).click();
+  await expect(page.getByText(/Floor could not be removed/)).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
+  await expect(page.getByRole('button', { name: 'Add room', exact: true })).toBeEnabled();
+});
+
+test('floor lifecycle prevents another edit or find from redirecting a floor draft', async ({ page }) => {
+  await mockApi(page, { rooms: [room, { ...room, id: 2, name: 'Upper room', floor: 'upper' }] });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'outlet: North wall outlet' }).click();
+  await page.locator('.floor-manager summary').click();
+  await page.getByRole('button', { name: 'Rename floor', exact: true }).click();
+  const form = page.locator('.floor-management-form');
+  await form.getByLabel('Rename floor').fill('Ground');
+  await expect(page.getByRole('button', { name: 'Edit point', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Move point', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Delete point', exact: true })).toBeDisabled();
+  await page.getByRole('searchbox').fill('Upper room');
+  const result = page.locator('.floorplan-find-results button').filter({ hasText: 'Upper room' });
+  await result.click();
+  await expect(page.getByText('Save or cancel the floor draft before finding another item.')).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
+  await expect(form.getByLabel('Rename floor')).toHaveValue('Ground');
+  await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await result.click();
+  await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('upper');
+});

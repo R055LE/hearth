@@ -10,7 +10,7 @@ import {
   suggestedRectangleOrigin,
 } from '../floorplanGeometry';
 import type { AxisAlignedRectangle } from '../floorplanGeometry';
-import type { Circuit, CircuitPoint, Floorplan, MeasurementSource, Panel, Room } from '../types';
+import type { Circuit, CircuitPoint, Floor, Floorplan, MeasurementSource, Panel, Room } from '../types';
 
 type InteractionMode = 'idle' | 'add' | 'walk' | 'edit' | 'move' | 'room';
 type PointDraft = Omit<CircuitPoint, 'id'>;
@@ -278,9 +278,10 @@ export function FloorplanView({
   initialCircuitId?: number;
   initialFloor?: string;
   initialWalking?: boolean;
-  onOpenRooms: () => void;
+  onOpenRooms: (floor: string) => void;
 }) {
   const [allRooms, setAllRooms] = useState<Room[]>([]);
+  const [allFloors, setAllFloors] = useState<Floor[]>([]);
   const [allPoints, setAllPoints] = useState<CircuitPoint[]>([]);
   const [panels, setPanels] = useState<Panel[]>([]);
   const [circuits, setCircuits] = useState<Circuit[]>([]);
@@ -301,6 +302,9 @@ export function FloorplanView({
   const [walkCreatedIds, setWalkCreatedIds] = useState<number[]>([]);
   const [findDataReady, setFindDataReady] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [floorAction, setFloorAction] = useState<'create' | 'rename' | null>(null);
+  const [floorNameDraft, setFloorNameDraft] = useState('');
+  const [floorSaving, setFloorSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport | null>(null);
   const [pendingFindTarget, setPendingFindTarget] = useState<FloorplanFindTarget | null>(null);
@@ -344,27 +348,28 @@ export function FloorplanView({
     marker?.scrollIntoView({ block: 'center' });
   }
 
-  const floors = useMemo(() => {
-    const names = new Set(allRooms.map((room) => room.floor));
-    if (floor) names.add(floor);
-    if (names.size === 0) names.add('main');
-    return Array.from(names).sort();
-  }, [allRooms, floor]);
+  const floors = allFloors.map((item) => item.name);
+  const currentFloor = allFloors.find((item) => item.name === floor) ?? null;
+  const floorHasRooms = allRooms.some((room) => room.floor === floor);
+  const floorBusy = floorAction !== null || floorSaving;
 
   useEffect(() => {
     Promise.all([
+      api.floors.list(),
       api.rooms.list(),
       api.panels.list(),
       api.circuits.list(),
       api.circuitPoints.list(),
     ])
-      .then(([rooms, panelList, circuitList, pointList]) => {
+      .then(([floorList, rooms, panelList, circuitList, pointList]) => {
+        setAllFloors(floorList);
         setAllRooms(rooms);
         setPanels(panelList);
         setCircuits(circuitList);
         setAllPoints(pointList);
         setError(null);
-        if (!floor && rooms.length > 0) setFloor(rooms[0].floor);
+        setFloor((current) => floorList.some((item) => item.name === current)
+          ? current : floorList[0]?.name ?? '');
       })
       .catch((err) => setError(String(err)))
       .finally(() => setFindDataReady(true));
@@ -372,7 +377,11 @@ export function FloorplanView({
   }, []);
 
   useEffect(() => {
-    if (!floor) return;
+    if (!allFloors.some((item) => item.name === floor)) {
+      setPlan({ rooms: [], circuit_points: [] });
+      setPlanFloor(null);
+      return;
+    }
     let current = true;
     setPlanFloor(null);
     api.floorplan
@@ -389,7 +398,7 @@ export function FloorplanView({
     return () => {
       current = false;
     };
-  }, [floor]);
+  }, [allFloors, floor]);
 
   const draftRectangle = roomDraft ? rectangleFromDraft(roomDraft) : null;
   const draftPolygon = draftRectangle ? rectanglePolygon(draftRectangle) : null;
@@ -998,6 +1007,12 @@ export function FloorplanView({
   }
 
   function chooseFindTarget(target: FloorplanFindTarget) {
+    if (floorBusy) {
+      setError(floorAction
+        ? 'Save or cancel the floor draft before finding another item.'
+        : 'Wait for the floor change to finish before finding another item.');
+      return;
+    }
     if (roomDraft || draftPoint) {
       setPendingFindTarget(target);
       return;
@@ -1044,8 +1059,79 @@ export function FloorplanView({
     setFloor(nextFloor);
   }
 
+  function beginFloorAction(action: 'create' | 'rename') {
+    setFloorNameDraft(action === 'rename' ? floor : '');
+    setFloorAction(action);
+    setError(null);
+  }
+
+  async function saveFloor(event: React.FormEvent) {
+    event.preventDefault();
+    if (!floorAction || (floorAction === 'rename' && !currentFloor)) return;
+    setFloorSaving(true);
+    try {
+      if (floorAction === 'create') {
+        const created = await api.floors.create(floorNameDraft);
+        setAllFloors((items) => [...items, created].sort((a, b) => a.name.localeCompare(b.name)));
+        setPlan({ rooms: [], circuit_points: [] });
+        setPlanFloor(null);
+        setSelectedPointId(null);
+        setSelectedRoomId(null);
+        setSelectedPanelId(null);
+        setSelectedCircuitId(null);
+        setViewport(null);
+        setFloor(created.name);
+      } else if (currentFloor) {
+        const oldName = currentFloor.name;
+        const renamed = await api.floors.rename(currentFloor.id, floorNameDraft);
+        setAllFloors((items) => items.map((item) => item.id === renamed.id ? renamed : item)
+          .sort((a, b) => a.name.localeCompare(b.name)));
+        setAllRooms((rooms) => rooms.map((room) => room.floor === oldName
+          ? { ...room, floor: renamed.name } : room));
+        setPlan((current) => ({ ...current, rooms: current.rooms.map((room) =>
+          room.floor === oldName ? { ...room, floor: renamed.name } : room) }));
+        setFloor(renamed.name);
+      }
+      setFloorAction(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFloorSaving(false);
+    }
+  }
+
+  async function removeFloor() {
+    if (!currentFloor) return;
+    if (floorHasRooms) {
+      setError("Move or delete this floor's rooms before removing it.");
+      return;
+    }
+    if (!window.confirm(`Remove empty floor ${currentFloor.name}? This cannot be undone.`)) return;
+    setFloorSaving(true);
+    try {
+      await api.floors.remove(currentFloor.id);
+      const remaining = allFloors.filter((item) => item.id !== currentFloor.id);
+      setAllFloors(remaining);
+      setPlan({ rooms: [], circuit_points: [] });
+      setPlanFloor(null);
+      setSelectedPointId(null);
+      setSelectedRoomId(null);
+      setSelectedPanelId(null);
+      setSelectedCircuitId(null);
+      setViewport(null);
+      setFloor(remaining[0]?.name ?? '');
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFloorSaving(false);
+    }
+  }
+
   function startRoomCreate() {
-    const roomFloor = floor || allRooms[0]?.floor || 'main';
+    if (!currentFloor) return;
+    const roomFloor = floor;
     const [x, y] = suggestedRectangleOrigin(
       allRooms.filter((room) => room.floor === roomFloor),
     );
@@ -1407,10 +1493,11 @@ export function FloorplanView({
             <label>
               Floor:{' '}
               <select
-                value={floor || floors[0]}
+                value={floor}
                 onChange={(e) => handleFloorChange(e.target.value)}
-                disabled={mode === 'room'}
+                disabled={mode === 'room' || floorBusy || floors.length === 0}
               >
+                {floors.length === 0 && <option value="">No floors</option>}
                 {floors.map((f) => (
                   <option key={f} value={f}>
                     {f}
@@ -1418,25 +1505,58 @@ export function FloorplanView({
                 ))}
               </select>
             </label>
-            <button type="button" onClick={startRoomCreate} disabled={mode !== 'idle'}>
+            <details className="floor-manager">
+              <summary>Manage floors</summary>
+              <div className="floor-manager-actions">
+                <button type="button" onClick={() => beginFloorAction('create')} disabled={!findDataReady || mode !== 'idle' || floorBusy}>
+                  Add floor
+                </button>
+                <button type="button" onClick={() => beginFloorAction('rename')} disabled={mode !== 'idle' || floorBusy || !currentFloor}>
+                  Rename floor
+                </button>
+                <button type="button" onClick={removeFloor} disabled={mode !== 'idle' || floorBusy || !currentFloor}>
+                  Remove floor
+                </button>
+              </div>
+            </details>
+            <button type="button" onClick={startRoomCreate} disabled={mode !== 'idle' || floorBusy || !currentFloor}>
               Add room
             </button>
             <button
               onClick={startAdd}
-              disabled={activeEdit || mode === 'walk' || mode === 'room' || plan.rooms.length === 0}
+              disabled={floorBusy || activeEdit || mode === 'walk' || mode === 'room' || plan.rooms.length === 0}
             >
               {mode === 'add' ? 'Cancel add point' : 'Add point'}
             </button>
             <button
               onClick={startWalk}
-              disabled={activeEdit || mode === 'add' || mode === 'room' || circuits.length === 0 || plan.rooms.length === 0}
+              disabled={floorBusy || activeEdit || mode === 'add' || mode === 'room' || circuits.length === 0 || plan.rooms.length === 0}
             >
               {mode === 'walk' ? 'Finish circuit walk' : 'Walk circuit'}
             </button>
           </div>
+          {floorAction && (
+            <form className="floor-management-form" onSubmit={saveFloor}>
+              <label>
+                {floorAction === 'create' ? 'New floor name' : 'Rename floor'}
+                <input value={floorNameDraft} onChange={(event) => setFloorNameDraft(event.target.value)} disabled={floorSaving} required autoFocus />
+              </label>
+              <button type="submit" disabled={floorSaving || !floorNameDraft.trim()}>
+                {floorSaving ? 'Saving…' : 'Save floor'}
+              </button>
+              <button type="button" disabled={floorSaving} onClick={() => { setFloorAction(null); setError(null); }}>
+                Cancel
+              </button>
+            </form>
+          )}
           {displayedRooms.length === 0 && !roomDraft ? (
             <div>
-              {selectedCircuit ? (
+              {!currentFloor ? (
+                <>
+                  <p>Create a floor to start a floorplan.</p>
+                  <button type="button" onClick={() => beginFloorAction('create')} disabled={!findDataReady || floorBusy}>Add floor</button>
+                </>
+              ) : selectedCircuit ? (
                 <>
                   <p>Add a room before mapping {circuitLabel(selectedCircuit.id)}.</p>
                   <p>Then return to this breaker and choose Map breaker.</p>
@@ -1444,8 +1564,10 @@ export function FloorplanView({
               ) : (
                 <p>Add a room before placing points on the floorplan.</p>
               )}
-              <button type="button" onClick={startRoomCreate}>Add a rectangular room</button>{' '}
-              <button type="button" onClick={onOpenRooms}>Add a measured or irregular room</button>
+              {currentFloor && <>
+                <button type="button" onClick={startRoomCreate} disabled={floorBusy}>Add a rectangular room</button>{' '}
+                <button type="button" onClick={() => onOpenRooms(floor)} disabled={floorBusy}>Add a measured or irregular room</button>
+              </>}
             </div>
           ) : (
             <>
@@ -1707,6 +1829,7 @@ export function FloorplanView({
           {roomDraft ? (
             <RoomDraftForm
               draft={roomDraft}
+              floors={floors}
               resizing={resizingRoom}
               saving={saving}
               onChange={changeRoomDraft}
@@ -1753,9 +1876,9 @@ export function FloorplanView({
               )}
               <div className="form-actions">
                 <button className="back-to-map" type="button" onClick={() => returnToPoint(selectedPointId)}>Back to map</button>
-                <button type="button" onClick={() => beginEdit(false)}>Edit point</button>
-                <button type="button" onClick={() => beginEdit(true)}>Move point</button>
-                <button type="button" onClick={deleteSelectedPoint}>Delete point</button>
+                <button type="button" onClick={() => beginEdit(false)} disabled={floorBusy}>Edit point</button>
+                <button type="button" onClick={() => beginEdit(true)} disabled={floorBusy}>Move point</button>
+                <button type="button" onClick={deleteSelectedPoint} disabled={floorBusy}>Delete point</button>
               </div>
             </div>
           ) : selectedPanel && mode === 'idle' ? (
@@ -1796,17 +1919,17 @@ export function FloorplanView({
               <p>Floor: {selectedRoom.floor}</p>
               {editableRectangle(selectedRoom) ? (
                 <div className="form-actions">
-                  <button type="button" onClick={() => startRoomEdit(selectedRoom)}>
+                  <button type="button" onClick={() => startRoomEdit(selectedRoom)} disabled={floorBusy}>
                     Edit room on map
                   </button>
-                  <button type="button" onClick={() => startRoomEdit(selectedRoom, true)}>
+                  <button type="button" onClick={() => startRoomEdit(selectedRoom, true)} disabled={floorBusy}>
                     Resize room on map
                   </button>
                 </div>
               ) : (
                 <>
                   <p>This room uses measured or irregular geometry.</p>
-                  <button type="button" onClick={onOpenRooms}>Open geometry editor</button>
+                  <button type="button" onClick={() => onOpenRooms(selectedRoom.floor)} disabled={floorBusy}>Open geometry editor</button>
                 </>
               )}
             </div>
@@ -1929,6 +2052,7 @@ export function FloorplanView({
 
 function RoomDraftForm({
   draft,
+  floors,
   resizing,
   saving,
   onChange,
@@ -1936,6 +2060,7 @@ function RoomDraftForm({
   onSubmit,
 }: {
   draft: RoomDraft;
+  floors: string[];
   resizing: boolean;
   saving: boolean;
   onChange: (change: Partial<RoomDraft>) => void;
@@ -1972,13 +2097,15 @@ function RoomDraftForm({
       </label>
       <label>
         Floor
-        <input
+        <select
           aria-label="Room floor"
           value={draft.floor}
           onChange={(event) => onChange({ floor: event.target.value })}
           disabled={draft.roomId !== null}
           required
-        />
+        >
+          {floors.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
       </label>
       <div className="room-dimensions">
         <label>
