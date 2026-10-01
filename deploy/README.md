@@ -114,12 +114,14 @@ missed chown costs a restart, not data.
   be backward-compatible. On failure, stop the timer and container, preserve the current database
   plus any WAL/SHM files, restore a selected standalone backup, and start a known-compatible image.
   The failed systemd unit and container logs are the evidence for choosing that image.
+- **Image cleanup.** Pruning belongs in coordinated host maintenance. On a shared Docker daemon,
+  cleanup must hold every image consumer's project lock so it cannot overlap a pull or run.
 
 ## Updating the host-side deploy controls
 
 The image poll does not update `compose.yaml` or `/usr/local/bin/hearth-deploy` itself. After a
-change to either file, copy the new Compose file and reinstall the timer before relying on the new
-control:
+change to either file, copy the new Compose file and explicitly reinstall the timer before relying
+on the new control:
 
 ```bash
 scp ../compose.yaml "$HOST":/opt/hearth/
