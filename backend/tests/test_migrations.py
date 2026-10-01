@@ -4,7 +4,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.command import upgrade
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import MetaData, Table, create_engine, inspect, text
 from sqlalchemy.pool import StaticPool
 
 from hearth.database import Base
@@ -78,4 +78,53 @@ def test_retirement_migration_preserves_existing_maintenance_history():
             )
         ).one() == (1, "2026-06-01", "2026-06-02")
 
+    engine.dispose()
+
+
+def test_floor_migration_preserves_existing_labels_geometry_and_references():
+    engine = create_engine("sqlite://", poolclass=StaticPool)
+    config = Config(Path(__file__).parents[1] / "alembic.ini")
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        upgrade(config, "c9f1a4b7e2d0")
+        for room_id, floor in enumerate(("main", "Main", " upper / attic ", "main"), 1):
+            connection.execute(
+                text(
+                    "INSERT INTO rooms (id, name, floor, polygon, measurement_source) "
+                    "VALUES (:id, 'Room', :floor, '[[0, 0], [10, 0], [10, 10]]', NULL)"
+                ),
+                {"id": room_id, "floor": floor},
+            )
+        statements = (
+            "INSERT INTO panels (id, name, room_id) VALUES (1, 'Panel', 1)",
+            "INSERT INTO circuits (id, panel_id, breaker_label) VALUES (1, 1, '1')",
+            "INSERT INTO circuit_points (id, circuit_id, room_id, kind, x, y) "
+            "VALUES (1, 1, 1, 'outlet', 2, 3)",
+            "INSERT INTO maintenance_tasks (id, title, room_id, due_date) "
+            "VALUES (1, 'Filter', 4, '2026-10-01')",
+            "INSERT INTO maintenance_completions (id, task_id, scheduled_for, completed_on) "
+            "VALUES (1, 1, '2026-09-01', '2026-09-02')",
+        )
+        for statement in statements:
+            connection.execute(text(statement))
+        table_names = (
+            "rooms", "panels", "circuits", "circuit_points",
+            "maintenance_tasks", "maintenance_completions",
+        )
+        tables = [Table(name, MetaData(), autoload_with=connection) for name in table_names]
+        before = {
+            table.name: connection.execute(table.select().order_by(table.c.id)).all()
+            for table in tables
+        }
+
+        upgrade(config, "head")
+
+        assert {row[0] for row in connection.execute(text("SELECT name FROM floors"))} == {
+            "main", "Main", " upper / attic "
+        }
+        assert {
+            table.name: connection.execute(table.select().order_by(table.c.id)).all()
+            for table in tables
+        } == before
+        assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
     engine.dispose()

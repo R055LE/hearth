@@ -46,6 +46,25 @@ def _required(value):
     return value
 
 
+class FloorWrite(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("floor name must not be blank")
+        return name
+
+
+class FloorRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+
+
 class RoomBase(BaseModel):
     name: str
     floor: str

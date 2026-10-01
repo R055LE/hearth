@@ -1,4 +1,4 @@
-import type { Circuit, CircuitPoint, Floorplan, MaintenanceTask, Panel, Room } from './types';
+import type { Circuit, CircuitPoint, Floor, Floorplan, MaintenanceTask, Panel, Room } from './types';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
@@ -26,6 +26,12 @@ const patch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 
 export const api = {
+  floors: {
+    list: () => request<Floor[]>('/floors'),
+    create: (name: string) => post<Floor>('/floors', { name }),
+    rename: (id: number, name: string) => patch<Floor>(`/floors/${id}`, { name }),
+    remove: (id: number) => del(`/floors/${id}`),
+  },
   maintenanceTasks: {
     list: () => request<MaintenanceTask[]>('/maintenance-tasks'),
     create: (task: Omit<MaintenanceTask, 'id' | 'is_active' | 'retired' | 'completions'>) =>

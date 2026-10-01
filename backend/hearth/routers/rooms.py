@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from hearth import models, schemas
 from hearth.database import get_db
 from hearth.routers._database import commit_or_conflict
+from hearth.routers.floors import ensure_floor
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 
@@ -115,7 +116,9 @@ def list_rooms(db: Session = Depends(get_db)):
 
 @router.post("", response_model=schemas.RoomRead, status_code=201)
 def create_room(room: schemas.RoomCreate, db: Session = Depends(get_db)):
-    db_room = models.Room(**room.model_dump())
+    details = room.model_dump()
+    details["floor"] = ensure_floor(db, details["floor"])
+    db_room = models.Room(**details)
     db.add(db_room)
     commit_or_conflict(db, "Room could not be created")
     db.refresh(db_room)
@@ -136,6 +139,8 @@ def update_room(room_id: int, room: schemas.RoomUpdate, db: Session = Depends(ge
     if db_room is None:
         raise HTTPException(status_code=404, detail="Room not found")
     changes = room.model_dump(exclude_unset=True)
+    if "floor" in changes:
+        changes["floor"] = ensure_floor(db, changes["floor"])
     if "polygon" in changes:
         _preserve_circuit_points(db_room, changes["polygon"])
     for field, value in changes.items():

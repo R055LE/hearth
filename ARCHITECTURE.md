@@ -20,8 +20,10 @@ now). This mirrors the only other long-running self-hosted app in this workspace
 
 ## Data model and the coordinate space
 
-`rooms`, `panels`, `circuits`, `circuit_points`, `maintenance_tasks`, and
-`maintenance_completions` are the six tables (see `backend/hearth/models.py`).
+`floors`, `rooms`, `panels`, `circuits`, `circuit_points`, `maintenance_tasks`, and
+`maintenance_completions` are the seven tables (see `backend/hearth/models.py`).
+Floors retain names even without rooms; room responses keep their floor name so
+existing clients can still create rooms by name.
 The one non-obvious floorplan piece: every room's `polygon` and
 every `circuit_point`'s `x`/`y` live in the **same coordinate space per floor** —
 there's no per-room-relative positioning. That's what lets the frontend render an

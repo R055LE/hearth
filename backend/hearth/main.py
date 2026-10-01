@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from hearth.routers import circuit_points, circuits, floorplan, maintenance, panels, rooms
+from hearth.routers import circuit_points, circuits, floorplan, floors, maintenance, panels, rooms
 
 # Schema is managed by Alembic (`alembic upgrade head`), not created here —
 # run migrations before starting the app.
@@ -12,6 +12,7 @@ app = FastAPI(title="hearth")
 
 api = FastAPI()
 api.include_router(rooms.router)
+api.include_router(floors.router)
 api.include_router(panels.router)
 api.include_router(circuits.router)
 api.include_router(circuit_points.router)

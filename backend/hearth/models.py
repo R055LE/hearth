@@ -1,9 +1,17 @@
 from datetime import date
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Text
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from hearth.database import Base
+
+
+class Floor(Base):
+    __tablename__ = "floors"
+    __table_args__ = (UniqueConstraint("name", name="uq_floors_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(nullable=False)
 
 
 class Room(Base):

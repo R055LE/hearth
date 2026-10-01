@@ -160,6 +160,37 @@
   margin-bottom: 0.5rem;
 }
 
+.floor-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.floor-manager {
+  max-width: 100%;
+}
+
+.floor-manager summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.floor-management-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: end;
+  margin-bottom: 0.75rem;
+}
+
+.floor-management-form label {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .floorplan-navigation {
   display: flex;
   flex-wrap: wrap;

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { Room } from '../types';
+import type { Floor, Room } from '../types';
 import { RoomBuilder } from './RoomBuilder';
 
-export function RoomEditor() {
+export function RoomEditor({ initialFloor }: { initialFloor?: string | null }) {
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [floors, setFloors] = useState<Floor[]>([]);
   const [addingRoom, setAddingRoom] = useState(false);
   const [editingDetails, setEditingDetails] = useState<Room | null>(null);
   const [editingGeometry, setEditingGeometry] = useState<Room | null>(null);
@@ -14,10 +15,10 @@ export function RoomEditor() {
   const [error, setError] = useState<string | null>(null);
 
   function refresh() {
-    api.rooms
-      .list()
-      .then((roomList) => {
+    Promise.all([api.rooms.list(), api.floors.list()])
+      .then(([roomList, floorList]) => {
         setRooms(roomList);
+        setFloors(floorList);
         setError(null);
       })
       .catch((err) => setError(String(err)));
@@ -126,12 +127,14 @@ export function RoomEditor() {
             </label>
             <label>
               Floor
-              <input
+              <select
                 aria-label="Room floor"
                 value={detailsFloor}
                 onChange={(e) => setDetailsFloor(e.target.value)}
                 required
-              />
+              >
+                {floors.map((floor) => <option key={floor.id} value={floor.name}>{floor.name}</option>)}
+              </select>
             </label>
           </div>
           <div className="form-actions">
@@ -149,6 +152,8 @@ export function RoomEditor() {
           <RoomBuilder
             key={editingGeometry?.id ?? 'new'}
             allRooms={rooms}
+            floors={floors}
+            initialFloor={initialFloor}
             editingRoom={editingGeometry}
             onSaved={() => {
               setAddingRoom(false);
@@ -162,16 +167,20 @@ export function RoomEditor() {
           />
         </>
       ) : (
-        <button
-          type="button"
-          onClick={() => {
-            setEditingDetails(null);
-            setEditingGeometry(null);
-            setAddingRoom(true);
-          }}
-        >
-          Add room
-        </button>
+        <>
+          <button
+            type="button"
+            disabled={floors.length === 0}
+            onClick={() => {
+              setEditingDetails(null);
+              setEditingGeometry(null);
+              setAddingRoom(true);
+            }}
+          >
+            Add room
+          </button>
+          {floors.length === 0 && <p>Create a floor on the Floorplan first.</p>}
+        </>
       )}
     </div>
   );

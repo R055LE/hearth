@@ -25,6 +25,11 @@ export interface Room {
   measurement_source?: MeasurementSource | null;
 }
 
+export interface Floor {
+  id: number;
+  name: string;
+}
+
 export interface Panel {
   id: number;
   name: string;

@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import { api } from '../api';
 import { closureGapFt, wallsToPolygon, wallsToVertices } from '../wallWalk';
 import type { StartPoint, Turn, Wall } from '../wallWalk';
-import type { MeasurementSource, Room } from '../types';
+import type { Floor, MeasurementSource, Room } from '../types';
 
 const CLOSURE_EPSILON_FT = 1 / 12;
 
@@ -35,10 +35,10 @@ interface FormState {
   staleAnchorNotice: boolean;
 }
 
-function initialFormState(editingRoom: Room | null, allRooms: Room[]): FormState {
+function initialFormState(editingRoom: Room | null, allRooms: Room[], floors: Floor[], initialFloor?: string | null): FormState {
   const base: FormState = {
     name: '',
-    floor: 'main',
+    floor: floors.find((item) => item.name === initialFloor)?.name ?? floors[0]?.name ?? '',
     // Rectangle entry is the common path for new rooms; editing always walks walls because
     // the shape is already fixed and must not be silently re-derived from length × width.
     shapeMode: editingRoom ? 'walls' : 'rectangle',
@@ -95,17 +95,21 @@ function initialFormState(editingRoom: Room | null, allRooms: Room[]): FormState
 
 export function RoomBuilder({
   allRooms,
+  floors,
+  initialFloor,
   editingRoom = null,
   onSaved,
   onCancel,
 }: {
   allRooms: Room[];
+  floors: Floor[];
+  initialFloor?: string | null;
   editingRoom?: Room | null;
   onSaved: () => void;
   onCancel?: () => void;
 }) {
   const formId = useId();
-  const initial = initialFormState(editingRoom, allRooms);
+  const initial = initialFormState(editingRoom, allRooms, floors, initialFloor);
   const [name, setName] = useState(initial.name);
   const [floor, setFloor] = useState(initial.floor);
   const [shapeMode, setShapeMode] = useState<'rectangle' | 'walls'>(initial.shapeMode);
@@ -336,7 +340,9 @@ export function RoomBuilder({
             Name: <input value={name} onChange={(e) => setName(e.target.value)} required />
           </label>
           <label>
-            Floor: <input value={floor} onChange={(e) => setFloor(e.target.value)} required />
+            Floor: <select value={floor} onChange={(e) => setFloor(e.target.value)} required>
+              {floors.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+            </select>
           </label>
         </div>
 

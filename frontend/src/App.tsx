@@ -18,6 +18,7 @@ function tabFromLocation(): Tab {
 
 function App() {
   const [tab, setTab] = useState<Tab>(tabFromLocation);
+  const [roomInitialFloor, setRoomInitialFloor] = useState<string | null>(null);
   const [floorplanTarget, setFloorplanTarget] = useState<{
     circuitId: number;
     floor?: string;
@@ -29,6 +30,7 @@ function App() {
       const nextTab = tabFromLocation();
       setTab(nextTab);
       if (nextTab !== 'floorplan') setFloorplanTarget(null);
+      if (nextTab !== 'rooms') setRoomInitialFloor(null);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -63,7 +65,7 @@ function App() {
           <button
             className={tab === 'rooms' ? 'active' : ''}
             aria-current={tab === 'rooms' ? 'page' : undefined}
-            onClick={() => openTab('rooms')}
+            onClick={() => { setRoomInitialFloor(null); openTab('rooms'); }}
           >
             Rooms
           </button>
@@ -89,10 +91,10 @@ function App() {
             initialCircuitId={floorplanTarget?.circuitId}
             initialFloor={floorplanTarget?.floor}
             initialWalking={floorplanTarget?.walk}
-            onOpenRooms={() => openTab('rooms')}
+            onOpenRooms={(floor) => { setRoomInitialFloor(floor); openTab('rooms'); }}
           />
         )}
-        {tab === 'rooms' && <RoomEditor />}
+        {tab === 'rooms' && <RoomEditor initialFloor={roomInitialFloor} />}
         {tab === 'panels' && <PanelEditor onViewCircuit={openFloorplan} onMapCircuit={mapCircuit} />}
         <MaintenanceView active={tab === 'maintenance'} />
       </main>
