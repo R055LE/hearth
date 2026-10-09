@@ -15,7 +15,7 @@ release [`f3b841090cc94f33`](https://github.com/R055LE/runtime-images/releases/t
 - runtime packages: 29
 - build packages: 53
 - scanned local application image ID:
-  `sha256:f066007e7f339f95ea27064c1798c147e000a65102bdad4d2b319304f8dd3ba9`
+  `sha256:cba5e0f986b8678873c41093461ee51d4e1f2ea7e78e3ebc64fad6ae1b6b1251`
 - complete application image: zero HIGH or CRITICAL findings across the Wolfi
   and Python package inventories, scanned with Trivy 0.74.0 and a vulnerability
   database updated 2026-10-09T19:06:47Z; the fixable-finding gate also passed
