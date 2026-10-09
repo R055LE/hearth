@@ -83,7 +83,8 @@ def test_delete_panel_cascades_circuits(client):
 
 def test_circuit_point_links_circuit_and_room(client):
     room = client.post(
-        "/rooms", json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0]]}
+        "/rooms",
+        json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]},
     ).json()
     panel = _make_panel(client)
     circuit = client.post(

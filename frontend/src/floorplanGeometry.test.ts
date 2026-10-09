@@ -99,3 +99,23 @@ describe('rectangle room geometry', () => {
     )).toEqual([24, 6]);
   });
 });
+
+describe('geometry correction', () => {
+  it('rejects degenerate and intersecting outlines, including adjacent overlap', async () => {
+    const { polygonError } = await import('./floorplanGeometry');
+    for (const polygon of [[], [[0, 0], [1, 0], [2, 0]], [[0, 0], [2, 0], [0, 2], [0, 0]], [[0, 0], [2, 2], [0, 2], [2, 0]], [[0, 0], [3, 0], [1, 0], [1, 2], [0, 2]], [[0, 0], [Infinity, 0], [0, 1]]] as [number, number][][]) {
+      expect(polygonError(polygon)).not.toBeNull();
+    }
+    expect(polygonError([[0, 0], [2, 0], [2, 2], [1, 1], [0, 2]])).toBeNull();
+  });
+
+  it('previews translation, rectangle resize and fixed points with legacy empty recovery', async () => {
+    const { previewRoomPoints } = await import('./floorplanGeometry');
+    const square: [number, number][] = [[0, 0], [10, 0], [10, 10], [0, 10]];
+    const points = [{ id: 7, x: 2, y: 4, label: 'Desk', circuit_id: 2, room_id: 3 }];
+    expect(previewRoomPoints(square, [[5, 1], [15, 1], [15, 11], [5, 11]], points)).toMatchObject({ policy: 'translation', points: [{ ...points[0], x: 7, y: 5 }], outside: false });
+    expect(previewRoomPoints(square, [[0, 0], [20, 0], [20, 5], [0, 5]], points)).toMatchObject({ policy: 'resize', points: [{ ...points[0], x: 4, y: 2 }] });
+    expect(previewRoomPoints(square, [[0, 0], [1, 0], [0, 1]], points)).toMatchObject({ policy: 'fixed', points, outside: true });
+    expect(previewRoomPoints([], square, [])).toMatchObject({ policy: 'fixed', outside: false });
+  });
+});

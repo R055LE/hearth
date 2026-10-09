@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from hearth import models, schemas
 from hearth.database import get_db
+from hearth.room_geometry import validate_room_geometry
 from hearth.routers._database import commit_or_conflict
 from hearth.routers.floors import ensure_floor
 
@@ -14,9 +15,11 @@ def _point_in_polygon(x: float, y: float, polygon: list[list[float]]) -> bool:
     for index, (end_x, end_y) in enumerate(polygon):
         start_x, start_y = polygon[index - 1]
         cross = (x - start_x) * (end_y - start_y) - (y - start_y) * (end_x - start_x)
-        if abs(cross) < 1e-9 and min(start_x, end_x) <= x <= max(start_x, end_x) and min(
-            start_y, end_y
-        ) <= y <= max(start_y, end_y):
+        if (
+            abs(cross) < 1e-9
+            and min(start_x, end_x) <= x <= max(start_x, end_x)
+            and min(start_y, end_y) <= y <= max(start_y, end_y)
+        ):
             return True
         if (start_y > y) != (end_y > y) and x < (end_x - start_x) * (y - start_y) / (
             end_y - start_y
@@ -99,8 +102,7 @@ def _preserve_circuit_points(db_room: models.Room, new_polygon: list[list[float]
         return
 
     point_outside = any(
-        not _point_in_polygon(point.x, point.y, new_polygon)
-        for point in db_room.circuit_points
+        not _point_in_polygon(point.x, point.y, new_polygon) for point in db_room.circuit_points
     )
     if point_outside:
         raise HTTPException(
@@ -118,6 +120,7 @@ def list_rooms(db: Session = Depends(get_db)):
 def create_room(room: schemas.RoomCreate, db: Session = Depends(get_db)):
     details = room.model_dump()
     details["floor"] = ensure_floor(db, details["floor"])
+    validate_room_geometry(db, details["polygon"], details["measurement_source"], details["floor"])
     db_room = models.Room(**details)
     db.add(db_room)
     commit_or_conflict(db, "Room could not be created")
@@ -141,6 +144,23 @@ def update_room(room_id: int, room: schemas.RoomUpdate, db: Session = Depends(ge
     changes = room.model_dump(exclude_unset=True)
     if "floor" in changes:
         changes["floor"] = ensure_floor(db, changes["floor"])
+    if "polygon" in changes or "measurement_source" in changes:
+        if (
+            "measurement_source" in changes
+            and changes["measurement_source"] is None
+            and db_room.measurement_source is not None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Stored measurements cannot be cleared; supply a valid replacement",
+            )
+        validate_room_geometry(
+            db,
+            changes.get("polygon", db_room.polygon),
+            changes.get("measurement_source", db_room.measurement_source),
+            changes.get("floor", db_room.floor),
+            room_id,
+        )
     if "polygon" in changes:
         _preserve_circuit_points(db_room, changes["polygon"])
     for field, value in changes.items():

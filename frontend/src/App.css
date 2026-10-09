@@ -998,3 +998,35 @@
     grid-template-columns: 1fr;
   }
 }
+
+.room-builder.embedded {
+  display: block;
+}
+
+.room-builder > .geometry-recovery,
+.room-builder > [role='alertdialog'] {
+  flex-basis: 100%;
+}
+
+.room-builder:has(.geometry-recovery),
+.room-builder:has([role='alertdialog']) {
+  flex-wrap: wrap;
+}
+
+.room-builder .geometry-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.measured-room-editor {
+  min-width: 0;
+}
+
+.measured-room-editor .wall-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.measured-room-editor .wall-row > :is(strong, select, button) {
+  grid-column: 1 / -1;
+}
