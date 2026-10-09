@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Floor, Room } from '../types';
-import { RoomBuilder } from './RoomBuilder';
+import { RoomBuilder, type GeometryGuard } from './RoomBuilder';
 
-export function RoomEditor({ initialFloor }: { initialFloor?: string | null }) {
+export function RoomEditor({ initialFloor, navigationGuard }: { initialFloor?: string | null; navigationGuard: GeometryGuard }) {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
   const [addingRoom, setAddingRoom] = useState(false);
@@ -150,6 +150,7 @@ export function RoomEditor({ initialFloor }: { initialFloor?: string | null }) {
         <>
           <h3>{editingGeometry ? `Edit geometry for ${editingGeometry.name}` : 'Add room'}</h3>
           <RoomBuilder
+            navigationGuard={navigationGuard}
             key={editingGeometry?.id ?? 'new'}
             allRooms={rooms}
             floors={floors}

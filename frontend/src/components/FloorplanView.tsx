@@ -1,11 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { wallsToPolygon } from '../wallWalk';
+import { RoomBuilder, type WallEditorHandle, type WallPreview, type GeometryGuard } from './RoomBuilder';
 import { FloorplanFinder, type FloorplanFindTarget } from './FloorplanFinder';
 import {
   axisAlignedRectangle,
-  mapPointBetweenRectangles,
+  previewRoomPoints,
   pointInPolygon,
-  rectanglePolygon,
+  polygonError,
   roomContainingPoint,
   suggestedRectangleOrigin,
 } from '../floorplanGeometry';
@@ -274,11 +276,13 @@ export function FloorplanView({
   initialFloor,
   initialWalking = false,
   onOpenRooms,
+  navigationGuard,
 }: {
   initialCircuitId?: number;
   initialFloor?: string;
   initialWalking?: boolean;
   onOpenRooms: (floor: string) => void;
+  navigationGuard: GeometryGuard;
 }) {
   const [allRooms, setAllRooms] = useState<Room[]>([]);
   const [allFloors, setAllFloors] = useState<Floor[]>([]);
@@ -296,6 +300,9 @@ export function FloorplanView({
   const [mode, setMode] = useState<InteractionMode>(initialWalking ? 'walk' : 'idle');
   const [draftPoint, setDraftPoint] = useState<PointDraft | null>(null);
   const [roomDraft, setRoomDraft] = useState<RoomDraft | null>(null);
+  const [measuredRoom, setMeasuredRoom] = useState<Room | null>(null);
+  const [wallPreview, setWallPreview] = useState<WallPreview | null>(null);
+  const wallEditor = useRef<WallEditorHandle>(null);
   const [resizingRoom, setResizingRoom] = useState(false);
   const [walkCircuitId, setWalkCircuitId] = useState<number | ''>(initialWalking ? initialCircuitId ?? '' : '');
   const [walkKind, setWalkKind] = useState('outlet');
@@ -401,29 +408,23 @@ export function FloorplanView({
   }, [allFloors, floor]);
 
   const draftRectangle = roomDraft ? rectangleFromDraft(roomDraft) : null;
-  const draftPolygon = draftRectangle ? rectanglePolygon(draftRectangle) : null;
+  const draftPolygon = measuredRoom ? wallPreview?.polygon ?? null : draftRectangle ? wallsToPolygon({ x: draftRectangle.x, y: draftRectangle.y, heading_deg: 0 }, rectangleMeasurement(draftRectangle).walls) : null;
   const displayedRooms = roomDraft
     ? allRooms.filter((room) => room.floor === roomDraft.floor)
     : plan.rooms;
   const editedRoom = roomDraft?.roomId == null
     ? null
     : allRooms.find((room) => room.id === roomDraft.roomId) ?? null;
-  const editedRectangle = editedRoom ? axisAlignedRectangle(editedRoom.polygon) : null;
   const displayedRoomIds = new Set(displayedRooms.map((room) => room.id));
   const pointsOnDisplayedFloor = plan.circuit_points.filter((point) =>
     displayedRoomIds.has(point.room_id),
   );
-  const displayedPoints = editedRoom && editedRectangle && draftRectangle
-    ? pointsOnDisplayedFloor.map((point) => {
-        if (point.room_id !== editedRoom.id) return point;
-        const [x, y] = mapPointBetweenRectangles(
-          [point.x, point.y],
-          editedRectangle,
-          draftRectangle,
-        );
-        return { ...point, x, y };
-      })
-    : pointsOnDisplayedFloor;
+  const displayedPoints = measuredRoom && wallPreview
+    ? pointsOnDisplayedFloor.map((p) => wallPreview.points.find((draft) => draft.id === p.id) ?? p)
+    : editedRoom && draftPolygon && !polygonError(draftPolygon)
+      ? pointsOnDisplayedFloor.map((point) => point.room_id === editedRoom.id
+          ? previewRoomPoints(editedRoom.polygon, draftPolygon, [point]).points[0] : point)
+      : pointsOnDisplayedFloor;
 
   const bounds = useMemo(() => {
     const xs: number[] = [];
@@ -890,6 +891,8 @@ export function FloorplanView({
     setMode('idle');
     setDraftPoint(null);
     setRoomDraft(null);
+    setMeasuredRoom(null);
+    setWallPreview(null);
   }
 
   function finishWalk() {
@@ -1013,6 +1016,7 @@ export function FloorplanView({
         : 'Wait for the floor change to finish before finding another item.');
       return;
     }
+    if (measuredRoom) { wallEditor.current?.requestLeave(() => { cancelMeasured(); showFindTarget(target); }); return; }
     if (roomDraft || draftPoint) {
       setPendingFindTarget(target);
       return;
@@ -1051,6 +1055,7 @@ export function FloorplanView({
 
   function handleFloorChange(nextFloor: string) {
     if (nextFloor === floor) return;
+    if (measuredRoom) { wallEditor.current?.requestLeave(() => { cancelMeasured(); setSelectedRoomId(null); setViewport(null); setFloor(nextFloor); }); return; }
     if (mode === 'walk') setWalkCreatedIds([]);
     finishInteraction();
     setSelectedPointId(null);
@@ -1165,6 +1170,32 @@ export function FloorplanView({
     focusMapBounds(boundsForPoints(room.polygon));
   }
 
+  function cancelMeasured() {
+    const id = measuredRoom?.id;
+    finishInteraction();
+    requestAnimationFrame(() => svgRef.current?.querySelector<SVGGElement>(`[data-room-id="${id}"]`)?.focus({ preventScroll: true }));
+    if (id != null) setSelectedRoomId(id);
+  }
+
+  function startMeasuredEdit(room: Room) {
+    setViewport(visibleViewport);
+    setMeasuredRoom(room);
+    setWallPreview(null);
+    setMode('room');
+    setError(null);
+  }
+
+  async function savedMeasured(saved: Room) {
+    const localRooms = allRooms.map((r) => r.id === saved.id ? saved : r);
+    setAllRooms(localRooms);
+    setPlan({ rooms: localRooms.filter((r) => r.floor === floor), circuit_points: displayedPoints });
+    cancelMeasured();
+    try {
+      const [rooms, floorplan, points] = await Promise.all([api.rooms.list(), api.floorplan.get(floor), api.circuitPoints.list()]);
+      setAllRooms(rooms); setPlan(floorplan); setAllPoints(points);
+    } catch (err) { setError(`Room saved, but refresh failed: ${String(err)}`); }
+  }
+
   function startRoomEdit(room: Room, resize = false) {
     const rectangle = editableRectangle(room);
     if (!rectangle) return;
@@ -1199,16 +1230,22 @@ export function FloorplanView({
     const payload = {
       name: roomDraft.name,
       floor: roomDraft.floor,
-      polygon: rectanglePolygon(rectangle),
+      polygon: wallsToPolygon({ x: rectangle.x, y: rectangle.y, heading_deg: 0 }, rectangleMeasurement(rectangle).walls),
       measurement_source: rectangleMeasurement(rectangle),
     };
+    const invalid = polygonError(payload.polygon);
+    if (invalid) { setError(invalid); return false; }
+    if (editedRoom && previewRoomPoints(editedRoom.polygon, payload.polygon,
+      allPoints.filter((p) => p.room_id === editedRoom.id)).outside) {
+      setError('Room shape would leave a mapped circuit point outside the room.');
+      return false;
+    }
     setSaving(true);
     let saved: Room;
     try {
       saved = roomDraft.roomId == null
         ? await api.rooms.create(payload)
         : await api.rooms.update(roomDraft.roomId, {
-            name: payload.name,
             polygon: payload.polygon,
             measurement_source: payload.measurement_source,
           });
@@ -1222,12 +1259,9 @@ export function FloorplanView({
       return false;
     }
 
-    const updatedPoints = editedRoom && editedRectangle
-      ? allPoints.map((point) => {
-          if (point.room_id !== editedRoom.id) return point;
-          const [x, y] = mapPointBetweenRectangles([point.x, point.y], editedRectangle, rectangle);
-          return { ...point, x, y };
-        })
+    const updatedPoints = editedRoom
+      ? allPoints.map((point) => point.room_id === editedRoom.id
+          ? previewRoomPoints(editedRoom.polygon, saved.polygon, [point]).points[0] : point)
       : allPoints;
 
     const localRooms = [
@@ -1430,7 +1464,9 @@ export function FloorplanView({
   const markerRadius = Math.max(bounds.width, bounds.height) * 0.018;
 
   return (
-    <section aria-labelledby="floorplan-heading">
+    <section aria-labelledby="floorplan-heading" onKeyDown={(event) => {
+      if (event.key === 'Escape' && measuredRoom) { event.stopPropagation(); wallEditor.current?.cancel(); }
+    }}>
       <h2 id="floorplan-heading">Floorplan</h2>
       <div
         className={`floorplan-layout${mode === 'walk' ? ' walking' : ''}${
@@ -1495,7 +1531,7 @@ export function FloorplanView({
               <select
                 value={floor}
                 onChange={(e) => handleFloorChange(e.target.value)}
-                disabled={mode === 'room' || floorBusy || floors.length === 0}
+                disabled={(mode === 'room' && !measuredRoom) || floorBusy || floors.length === 0}
               >
                 {floors.length === 0 && <option value="">No floors</option>}
                 {floors.map((f) => (
@@ -1628,6 +1664,7 @@ export function FloorplanView({
                       key={room.id}
                       role="button"
                       tabIndex={mode === 'idle' ? 0 : -1}
+                      data-room-id={room.id}
                       aria-label={`Room: ${room.name}`}
                       aria-pressed={isSelected}
                       onClick={(event) => {
@@ -1826,7 +1863,15 @@ export function FloorplanView({
         </div>
 
         <div className={`floorplan-sidebar${mode === 'walk' ? ' walk-sidebar' : ''}`}>
-          {roomDraft ? (
+          {measuredRoom ? (
+            <div className="info-card measured-room-editor">
+              <h3>Edit geometry for {measuredRoom.name}</h3>
+              <p>Saved outline stays visible. The dashed outline and mapped points preview your draft.</p>
+              <RoomBuilder key={measuredRoom.id} editingRoom={measuredRoom} allRooms={allRooms} floors={allFloors}
+                embedded editorRef={wallEditor} onPreview={setWallPreview} navigationGuard={navigationGuard}
+                onSaved={savedMeasured} onCancel={cancelMeasured} />
+            </div>
+          ) : roomDraft ? (
             <RoomDraftForm
               draft={roomDraft}
               floors={floors}
@@ -1922,6 +1967,7 @@ export function FloorplanView({
                   <button type="button" onClick={() => startRoomEdit(selectedRoom)} disabled={floorBusy}>
                     Edit room on map
                   </button>
+                  <button type="button" onClick={() => startMeasuredEdit(selectedRoom)} disabled={floorBusy}>Open geometry editor</button>
                   <button type="button" onClick={() => startRoomEdit(selectedRoom, true)} disabled={floorBusy}>
                     Resize room on map
                   </button>
@@ -1929,7 +1975,7 @@ export function FloorplanView({
               ) : (
                 <>
                   <p>This room uses measured or irregular geometry.</p>
-                  <button type="button" onClick={() => onOpenRooms(selectedRoom.floor)} disabled={floorBusy}>Open geometry editor</button>
+                  <button type="button" onClick={() => startMeasuredEdit(selectedRoom)} disabled={floorBusy}>Open geometry editor</button>
                 </>
               )}
             </div>
@@ -2086,6 +2132,7 @@ function RoomDraftForm({
             ? 'Drag the corner handle to resize. Use the fields for exact size. Saved rooms stay visible until Save.'
             : 'Drag the outlined room or tap the map to place it. Saved rooms stay visible until Save.'}
       </p>
+      {draft.roomId == null && <>
       <label>
         Name
         <input
@@ -2107,6 +2154,7 @@ function RoomDraftForm({
           {floors.map((name) => <option key={name} value={name}>{name}</option>)}
         </select>
       </label>
+      </>}
       <div className="room-dimensions">
         <label>
           Length (ft)

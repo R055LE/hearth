@@ -1,10 +1,28 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState, useImperativeHandle, useRef } from 'react';
 import { api } from '../api';
-import { closureGapFt, wallsToPolygon, wallsToVertices } from '../wallWalk';
+import { closureGapFt, wallsToPolygon, wallsToVertices, resolveMeasurementStart, wallDraftError } from '../wallWalk';
 import type { StartPoint, Turn, Wall } from '../wallWalk';
-import type { Floor, MeasurementSource, Room } from '../types';
+import { polygonError, previewRoomPoints } from '../floorplanGeometry';
+import type { CircuitPoint, Floor, MeasurementSource, Point, Room } from '../types';
 
-const CLOSURE_EPSILON_FT = 1 / 12;
+export interface WallEditorHandle {
+  save: () => Promise<boolean>;
+  cancel: () => void;
+  requestLeave: (proceed: () => void) => void;
+}
+export interface WallPreview { polygon: Point[]; points: CircuitPoint[] }
+export type GeometryGuard = React.MutableRefObject<((proceed: () => void) => void) | null>;
+
+function sourceProblem(room: Room | null, rooms: Room[]): string | null {
+  if (!room) return null;
+  const source = room.measurement_source;
+  if (!source) return 'This room has no saved measurements. The saved outline is authoritative. Re-measure to replace it.';
+  const start = resolveMeasurementStart(source, rooms, room.floor, room.id);
+  if (!start) return 'The saved anchor is missing or invalid. Choose a valid attachment or absolute placement before saving.';
+  const polygon = wallsToPolygon(start, source.walls);
+  if (wallDraftError(start, source.walls) || polygonError(polygon) || polygon.length !== room.polygon.length || polygon.some((p, i) => p.some((n, axis) => Math.abs(n - room.polygon[i][axis]) > 1e-9))) return 'Saved measurements or the anchor no longer match the saved outline. Review a replacement draft before saving.';
+  return null;
+}
 
 const HEADINGS: { label: string; direction: string; deg: number }[] = [
   { label: '↑', direction: 'up', deg: 270 },
@@ -32,10 +50,9 @@ interface FormState {
   anchorOffsetIn: string;
   anchorHeadingDeg: number;
   walls: Wall[];
-  staleAnchorNotice: boolean;
 }
 
-function initialFormState(editingRoom: Room | null, allRooms: Room[], floors: Floor[], initialFloor?: string | null): FormState {
+function initialFormState(editingRoom: Room | null, floors: Floor[], initialFloor?: string | null): FormState {
   const base: FormState = {
     name: '',
     floor: floors.find((item) => item.name === initialFloor)?.name ?? floors[0]?.name ?? '',
@@ -50,7 +67,6 @@ function initialFormState(editingRoom: Room | null, allRooms: Room[], floors: Fl
     anchorOffsetIn: '0',
     anchorHeadingDeg: 0,
     walls: [],
-    staleAnchorNotice: false,
   };
   if (!editingRoom) return base;
   const source = editingRoom.measurement_source;
@@ -68,22 +84,12 @@ function initialFormState(editingRoom: Room | null, allRooms: Room[], floors: Fl
     };
   }
   const anchorStart = source.start;
-  const anchorStillExists = allRooms.some((r) => r.id === anchorStart.anchor_room_id);
-  if (!anchorStillExists) {
-    return {
-      ...base,
-      name: editingRoom.name,
-      floor: editingRoom.floor,
-      start: { x: fallbackX, y: fallbackY, heading_deg: anchorStart.heading_deg },
-      walls: source.walls,
-      staleAnchorNotice: true,
-    };
-  }
   return {
     ...base,
     name: editingRoom.name,
     floor: editingRoom.floor,
     placementMode: 'anchor',
+    start: { x: fallbackX, y: fallbackY, heading_deg: anchorStart.heading_deg },
     anchorRoomId: anchorStart.anchor_room_id,
     anchorWallIndex: anchorStart.wall_index,
     anchorCorner: anchorStart.corner,
@@ -100,16 +106,24 @@ export function RoomBuilder({
   editingRoom = null,
   onSaved,
   onCancel,
+  editorRef,
+  onPreview,
+  embedded = false,
+  navigationGuard,
 }: {
   allRooms: Room[];
   floors: Floor[];
   initialFloor?: string | null;
   editingRoom?: Room | null;
-  onSaved: () => void;
+  onSaved: (room: Room) => void | Promise<void>;
+  editorRef?: React.Ref<WallEditorHandle>;
+  onPreview?: (preview: WallPreview | null) => void;
+  embedded?: boolean;
+  navigationGuard?: GeometryGuard;
   onCancel?: () => void;
 }) {
   const formId = useId();
-  const initial = initialFormState(editingRoom, allRooms, floors, initialFloor);
+  const initial = initialFormState(editingRoom, floors, initialFloor);
   const [name, setName] = useState(initial.name);
   const [floor, setFloor] = useState(initial.floor);
   const [shapeMode, setShapeMode] = useState<'rectangle' | 'walls'>(initial.shapeMode);
@@ -128,11 +142,43 @@ export function RoomBuilder({
   const [draftTurn, setDraftTurn] = useState<'left' | 'right' | 'straight' | 'custom'>('right');
   const [draftCustomDeg, setDraftCustomDeg] = useState('');
   const [error, setError] = useState<string | null>(null);
-  // Frozen at mount, not recomputed from `initial` on every render — `initial` is recomputed
-  // live off `allRooms`, but this notice describes what the form was seeded with, which only
-  // happens once (see the useState initializers above).
-  const [staleAnchorNotice] = useState(initial.staleAnchorNotice);
-  const [circuitPointCount, setCircuitPointCount] = useState(0);
+  const [points, setPoints] = useState<CircuitPoint[]>([]);
+  const [pointLoadAttempt, setPointLoadAttempt] = useState(0);
+  const [loadingPoints, setLoadingPoints] = useState(Boolean(editingRoom));
+  const [pointsLoaded, setPointsLoaded] = useState(!editingRoom);
+  const [problem] = useState(() => sourceProblem(editingRoom, allRooms));
+  const [recovering, setRecovering] = useState(!problem);
+  const [placementConfirmed, setPlacementConfirmed] = useState(!problem || editingRoom?.measurement_source?.start.mode !== 'anchor');
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [destination, setDestination] = useState<(() => void) | null>(null);
+  const leaveRef = useRef<HTMLDivElement>(null);
+  const leaveFocus = useRef<HTMLElement | null>(null);
+  const editorContainer = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const circuitPointCount = points.length;
+  function requestLeave(proceed: () => void) {
+    if (saving) return;
+    if (dirty) { leaveFocus.current = document.activeElement as HTMLElement; setDestination(() => proceed); }
+    else proceed();
+  }
+  function dismissLeave() {
+    setDestination(null);
+    leaveFocus.current?.focus();
+  }
+  function cancel() {
+    if (saving) return;
+    if (destination) dismissLeave();
+    else onCancel?.();
+  }
+  useImperativeHandle(editorRef, () => ({ save, requestLeave, cancel }));
+  useEffect(() => { if (destination) leaveRef.current?.focus(); }, [destination]);
+  useEffect(() => {
+    if (!navigationGuard || !editingRoom) return;
+    navigationGuard.current = requestLeave;
+    return () => { navigationGuard.current = null; };
+  });
+  useEffect(() => { if (editingRoom) (problem ? editorContainer.current : formRef.current)?.focus(); }, [editingRoom, problem]);
 
   // Rectangle mode uses the same four-wall representation as the measured path, so saved
   // geometry round-trips through Edit geometry.
@@ -153,9 +199,11 @@ export function RoomBuilder({
   useEffect(() => {
     if (!editingRoom) return;
     api.floorplan.get(editingRoom.floor).then((fp) => {
-      setCircuitPointCount(fp.circuit_points.filter((p) => p.room_id === editingRoom.id).length);
-    }).catch((err) => setError(String(err)));
-  }, [editingRoom]);
+      setPoints(fp.circuit_points.filter((p) => p.room_id === editingRoom.id));
+      setPointsLoaded(true);
+      setError(null);
+    }).catch((err) => setError(`Could not load mapped points: ${String(err)}`)).finally(() => setLoadingPoints(false));
+  }, [editingRoom, pointLoadAttempt]);
 
   const roomsOnFloor = useMemo(() => allRooms.filter((r) => r.floor === floor), [allRooms, floor]);
   // Excludes editingRoom itself — anchoring a room to its own previous save would recompute its
@@ -174,7 +222,7 @@ export function RoomBuilder({
   // a different room's wall list after switching the Room dropdown. resolvedStart and submit()
   // both key off this so they never disagree about what "anchored" means.
   const anchorValid =
-    placementMode === 'anchor' && anchorRoom !== null && anchorWallIndex < anchorWalls.length;
+    placementMode === 'anchor' && anchorRoom !== null && anchorWallIndex >= 0 && anchorWallIndex < anchorWalls.length && Math.hypot(anchorWalls[anchorWallIndex].to[0] - anchorWalls[anchorWallIndex].from[0], anchorWalls[anchorWallIndex].to[1] - anchorWalls[anchorWallIndex].from[1]) > 0;
 
   const resolvedStart = useMemo<StartPoint>(() => {
     if (!anchorValid || !anchorRoom) return start;
@@ -184,7 +232,7 @@ export function RoomBuilder({
     const dx = toX - fromX;
     const dy = toY - fromY;
     const wallLen = Math.hypot(dx, dy) || 1;
-    const offsetFt = (Number(anchorOffsetIn) || 0) / 12;
+    const offsetFt = Number(anchorOffsetIn) / 12;
     return {
       x: fromX + (dx / wallLen) * offsetFt,
       y: fromY + (dy / wallLen) * offsetFt,
@@ -203,7 +251,15 @@ export function RoomBuilder({
 
   const vertices = useMemo(() => wallsToVertices(resolvedStart, walls), [resolvedStart, walls]);
   const gap = useMemo(() => closureGapFt(resolvedStart, walls), [resolvedStart, walls]);
-  const closed = walls.length >= 3 && gap <= CLOSURE_EPSILON_FT;
+  const polygon = useMemo(() => wallsToPolygon(resolvedStart, walls), [resolvedStart, walls]);
+  const geometryError = (!placementConfirmed ? 'Confirm a valid attachment or choose absolute placement.' : null) || wallDraftError(resolvedStart, walls) || polygonError(polygon) ||
+    (placementMode === 'anchor' && (!anchorValid || !Number.isFinite(Number(anchorOffsetIn))) ? 'Select a valid anchor room, wall and offset.' : null);
+  const closed = !geometryError;
+  const pointPreview = useMemo(() => editingRoom && polygon.length >= 3 && !geometryError
+    ? previewRoomPoints(editingRoom.polygon, polygon, points) : null, [editingRoom, polygon, points, geometryError]);
+  useEffect(() => {
+    onPreview?.(recovering && !geometryError ? { polygon, points: pointPreview?.points ?? [] } : null);
+  }, [onPreview, recovering, geometryError, polygon, pointPreview]);
 
   const bounds = useMemo(() => {
     const xs: number[] = [];
@@ -214,7 +270,7 @@ export function RoomBuilder({
         ys.push(y);
       }
     }
-    for (const v of vertices) {
+    for (const v of recovering ? vertices : []) {
       xs.push(v.x);
       ys.push(v.y);
     }
@@ -225,12 +281,12 @@ export function RoomBuilder({
     const width = Math.max(...xs) - minX + pad;
     const height = Math.max(...ys) - minY + pad;
     return { minX, minY, width, height };
-  }, [roomsOnFloor, vertices]);
+  }, [roomsOnFloor, vertices, recovering]);
 
   function addWall() {
     const feet = draftFeet === '' ? 0 : Number(draftFeet);
     const inches = draftInches === '' ? 0 : Number(draftInches);
-    if (Number.isNaN(feet) || Number.isNaN(inches)) {
+    if (!Number.isFinite(feet) || !Number.isFinite(inches)) {
       setError('Wall length must be a number.');
       return;
     }
@@ -239,7 +295,9 @@ export function RoomBuilder({
       setError('Wall length must be greater than zero.');
       return;
     }
-    const turn: Turn = draftTurn === 'custom' ? { deg: Number(draftCustomDeg) || 0 } : draftTurn;
+    if (draftTurn === 'custom' && !Number.isFinite(Number(draftCustomDeg))) { setError('Turn must be finite.'); return; }
+    const turn: Turn = draftTurn === 'custom' ? { deg: Number(draftCustomDeg) } : draftTurn;
+    setDirty(true);
     setWalkedWalls((w) => [...w, { length_in, turn }]);
     setDraftFeet('');
     setDraftInches('');
@@ -247,6 +305,7 @@ export function RoomBuilder({
   }
 
   function undoLastWall() {
+    setDirty(true);
     setWalkedWalls((w) => w.slice(0, -1));
   }
 
@@ -285,20 +344,16 @@ export function RoomBuilder({
   }
 
   function removeWall(index: number) {
+    setDirty(true);
     setWalkedWalls((current) => current.filter((_, wallIndex) => wallIndex !== index));
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!closed) {
-      setError(`Shape doesn't close — off by ${(gap * 12).toFixed(1)}in. Adjust a wall length.`);
-      return;
+  async function save(): Promise<boolean> {
+    if (saving || !recovering) return false;
+    if (geometryError || pointPreview?.outside || !pointsLoaded) {
+      setError(geometryError || (pointPreview?.outside ? 'Room shape would leave a mapped circuit point outside the room.' : 'Wait for mapped points to load.'));
+      return false;
     }
-    if (placementMode === 'anchor' && !anchorValid) {
-      setError('Anchor room or wall is no longer valid — reselect a room and wall.');
-      return;
-    }
-    const polygon = wallsToPolygon(resolvedStart, walls);
     const sourceStart: MeasurementSource['start'] =
       anchorValid && anchorRoom
         ? {
@@ -306,36 +361,56 @@ export function RoomBuilder({
             anchor_room_id: anchorRoom.id,
             wall_index: anchorWallIndex,
             corner: anchorCorner,
-            offset_in: Number(anchorOffsetIn) || 0,
+            offset_in: Number(anchorOffsetIn),
             heading_deg: anchorHeadingDeg,
           }
         : { mode: 'absolute', x: start.x, y: start.y, heading_deg: start.heading_deg };
     const measurement_source: MeasurementSource = { unit: 'ft_in', start: sourceStart, walls };
+    setSaving(true);
+    let saved: Room;
     try {
-      if (editingRoom) {
-        await api.rooms.update(editingRoom.id, { name, floor, polygon, measurement_source });
-      } else {
-        await api.rooms.create({ name, floor, polygon, measurement_source });
-      }
+      saved = editingRoom
+        ? await api.rooms.update(editingRoom.id, { polygon, measurement_source })
+        : await api.rooms.create({ name, floor, polygon, measurement_source });
     } catch (err) {
-      setError(
-        `Failed to ${editingRoom ? 'save' : 'create'} room: ` +
-          (err instanceof Error ? err.message : String(err)),
-      );
-      return;
+      setError(`Failed to ${editingRoom ? 'save' : 'create'} room: ${err instanceof Error ? err.message : String(err)}`);
+      setSaving(false);
+      return false;
     }
-    setName('');
-    setWalkedWalls([]);
-    setRectLengthFt('');
-    setRectWidthFt('');
     setError(null);
-    onSaved();
+    setDirty(false);
+    setSaving(false);
+    await onSaved(saved);
+    return true;
+  }
+
+  async function saveAndLeave() {
+    const proceed = destination;
+    if (await save()) { setDestination(null); proceed?.(); }
   }
 
   return (
-    <div className="room-builder">
-      <form id={formId} className="stacked-form" onSubmit={submit}>
-        <div className={`field-grid room-basics${editingRoom ? ' editing' : ''}`}>
+    <div ref={editorContainer} tabIndex={-1} className={`room-builder${embedded ? ' embedded' : ''}`} onKeyDown={(event) => {
+      if (event.key === 'Escape') { event.stopPropagation(); cancel(); }
+    }}>
+      {destination && <div ref={leaveRef} tabIndex={-1} role="alertdialog" aria-label="Unsaved room geometry">
+        <p>Save your geometry changes before leaving?</p>
+        <div className="form-actions">
+          <button type="button" onClick={saveAndLeave} disabled={saving}>Save and continue</button>
+          <button type="button" onClick={() => { const proceed = destination; setDestination(null); proceed(); }} disabled={saving}>Discard and continue</button>
+          <button type="button" onClick={dismissLeave} disabled={saving}>Stay</button>
+        </div>
+      </div>}
+      {problem && <div className="geometry-recovery">
+        <p>{problem}</p>
+        {!recovering && <div className="form-actions">
+          {editingRoom?.measurement_source && <button type="button" onClick={() => { setRecovering(true); setDirty(true); }}>Review saved measurements as replacement</button>}
+          <button type="button" onClick={() => { setWalkedWalls([]); setPlacementMode('fresh'); setPlacementConfirmed(true); setStart({ x: editingRoom?.polygon[0]?.[0] ?? 0, y: editingRoom?.polygon[0]?.[1] ?? 0, heading_deg: 0 }); setRecovering(true); setDirty(true); }}>Re-measure room</button>
+        </div>}
+      </div>}
+      <form ref={formRef} tabIndex={-1} aria-label={editingRoom ? `Edit geometry for ${editingRoom.name}` : 'Create room'} id={formId} className="stacked-form" onChange={() => setDirty(true)} onSubmit={(e) => { e.preventDefault(); void save(); }}>
+        <fieldset className="geometry-fields" disabled={saving || !recovering} hidden={!recovering}>
+        {!editingRoom && <div className="field-grid room-basics">
           <label>
             Name: <input value={name} onChange={(e) => setName(e.target.value)} required />
           </label>
@@ -344,7 +419,7 @@ export function RoomBuilder({
               {floors.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
             </select>
           </label>
-        </div>
+        </div>}
 
         {circuitPointCount > 0 && (
           <p>
@@ -382,7 +457,7 @@ export function RoomBuilder({
                   <input
                     type="number"
                     min="0"
-                    step="0.1"
+                    step="any"
                     aria-label="Rectangle length in feet"
                     value={rectLengthFt}
                     onChange={(e) => setRectLengthFt(e.target.value)}
@@ -393,7 +468,7 @@ export function RoomBuilder({
                   <input
                     type="number"
                     min="0"
-                    step="0.1"
+                    step="any"
                     aria-label="Rectangle width in feet"
                     value={rectWidthFt}
                     onChange={(e) => setRectWidthFt(e.target.value)}
@@ -409,7 +484,7 @@ export function RoomBuilder({
           open={editingRoom || shapeMode === 'walls' ? true : undefined}
         >
           <summary>Position and direction (optional)</summary>
-          <fieldset>
+          <fieldset onChange={() => setPlacementConfirmed(true)}>
             <legend>Placement</legend>
             <label>
               <input
@@ -430,12 +505,14 @@ export function RoomBuilder({
               </label>
             )}
 
+            {placementMode === 'anchor' && !placementConfirmed && <button type="button" disabled={!anchorValid} onClick={() => { setPlacementConfirmed(true); setDirty(true); }}>Confirm selected attachment</button>}
             {placementMode === 'fresh' ? (
               <>
                 <label>
                   X (ft):{' '}
                   <input
                     type="number"
+                    step="any"
                     value={start.x}
                     onChange={(e) => setStart((s) => ({ ...s, x: Number(e.target.value) }))}
                   />
@@ -444,10 +521,12 @@ export function RoomBuilder({
                   Y (ft):{' '}
                   <input
                     type="number"
+                    step="any"
                     value={start.y}
                     onChange={(e) => setStart((s) => ({ ...s, y: Number(e.target.value) }))}
                   />
                 </label>
+                <label>First wall heading (degrees): <input type="number" step="any" value={start.heading_deg} onChange={(e) => setStart((s) => ({ ...s, heading_deg: Number(e.target.value) }))} /></label>
                 <div className="heading-buttons">
                   {HEADINGS.map((h) => (
                     <button
@@ -456,7 +535,7 @@ export function RoomBuilder({
                       className={start.heading_deg === h.deg ? 'active' : ''}
                       aria-label={`First wall direction ${h.direction}`}
                       aria-pressed={start.heading_deg === h.deg}
-                      onClick={() => setStart((s) => ({ ...s, heading_deg: h.deg }))}
+                      onClick={() => { setDirty(true); setPlacementConfirmed(true); setStart((s) => ({ ...s, heading_deg: h.deg })); }}
                     >
                       {h.label}
                     </button>
@@ -468,6 +547,7 @@ export function RoomBuilder({
                 <label>
                   Room:{' '}
                   <select value={anchorRoomId} onChange={(e) => setAnchorRoomId(Number(e.target.value))}>
+                    {!anchorRoom && anchorRoomId !== '' && <option value={anchorRoomId} disabled>Invalid saved anchor</option>}
                     <option value="" disabled>
                       Select a room
                     </option>
@@ -482,6 +562,7 @@ export function RoomBuilder({
                   <label>
                     Wall:{' '}
                     <select value={anchorWallIndex} onChange={(e) => setAnchorWallIndex(Number(e.target.value))}>
+                      {anchorWallIndex >= anchorWalls.length && <option value={anchorWallIndex} disabled>Invalid saved wall</option>}
                       {anchorWalls.map((w, i) => (
                         <option key={i} value={i}>
                           Wall {i + 1}: ({w.from[0]}, {w.from[1]}) → ({w.to[0]}, {w.to[1]})
@@ -499,8 +580,9 @@ export function RoomBuilder({
                 </label>
                 <label>
                   Offset (in):{' '}
-                  <input type="number" value={anchorOffsetIn} onChange={(e) => setAnchorOffsetIn(e.target.value)} />
+                  <input type="number" step="any" value={anchorOffsetIn} onChange={(e) => setAnchorOffsetIn(e.target.value)} />
                 </label>
+                <label>First wall heading (degrees): <input type="number" step="any" value={anchorHeadingDeg} onChange={(e) => setAnchorHeadingDeg(Number(e.target.value))} /></label>
                 <div className="heading-buttons">
                   {HEADINGS.map((h) => (
                     <button
@@ -509,7 +591,7 @@ export function RoomBuilder({
                       className={anchorHeadingDeg === h.deg ? 'active' : ''}
                       aria-label={`First wall direction ${h.direction}`}
                       aria-pressed={anchorHeadingDeg === h.deg}
-                      onClick={() => setAnchorHeadingDeg(h.deg)}
+                      onClick={() => { setDirty(true); setPlacementConfirmed(true); setAnchorHeadingDeg(h.deg); }}
                     >
                       {h.label}
                     </button>
@@ -536,7 +618,7 @@ export function RoomBuilder({
                   <input
                     type="number"
                     min="0"
-                    step="0.1"
+                    step="any"
                     aria-label={`Wall ${i + 1} feet`}
                     value={Math.floor(w.length_in / 12)}
                     onChange={(e) => updateWallLength(i, 'feet', e.target.valueAsNumber)}
@@ -547,9 +629,9 @@ export function RoomBuilder({
                   <input
                     type="number"
                     min="0"
-                    step="0.1"
+                    step="any"
                     aria-label={`Wall ${i + 1} inches`}
-                    value={Number((w.length_in % 12).toFixed(2))}
+                    value={w.length_in - Math.floor(w.length_in / 12) * 12}
                     onChange={(e) => updateWallLength(i, 'inches', e.target.valueAsNumber)}
                   />{' '}
                   in
@@ -568,7 +650,7 @@ export function RoomBuilder({
                   <label>
                     <input
                       type="number"
-                      step="0.1"
+                      step="any"
                       aria-label={`Wall ${i + 1} custom turn degrees`}
                       value={w.turn.deg}
                       onChange={(e) => updateCustomTurn(i, e.target.valueAsNumber)}
@@ -585,6 +667,7 @@ export function RoomBuilder({
           <div className="wall-entry">
             <input
               type="number"
+              step="any"
               placeholder="ft"
               aria-label="New wall feet"
               value={draftFeet}
@@ -592,6 +675,7 @@ export function RoomBuilder({
             />
             <input
               type="number"
+              step="any"
               placeholder="in"
               aria-label="New wall inches"
               value={draftInches}
@@ -610,6 +694,7 @@ export function RoomBuilder({
             {draftTurn === 'custom' && (
               <input
                 type="number"
+                step="any"
                 placeholder="deg"
                 aria-label="New wall custom turn degrees"
                 value={draftCustomDeg}
@@ -635,14 +720,18 @@ export function RoomBuilder({
           </fieldset>
         )}
 
-        {staleAnchorNotice && (
-          <p className="error">Original anchor room was deleted — placement reset to its last known position.</p>
-        )}
-        {error && <p className="error">{error}</p>}
+
+        </fieldset>
+        {recovering && geometryError && <p role="status">{geometryError}</p>}
+        {recovering && pointPreview && <p role={pointPreview.outside ? 'alert' : 'status'}>
+          {pointPreview.outside ? 'Room shape would leave a mapped circuit point outside the room.' : pointPreview.policy === 'translation' ? 'Mapped points move with the room.' : pointPreview.policy === 'resize' ? 'Mapped points keep their relative positions in the rectangle.' : 'Mapped points stay at their saved coordinates.'}
+        </p>}
+        {error && <p className="error" role="alert">{error}</p>}
+        {editingRoom && !pointsLoaded && <button type="button" disabled={loadingPoints} onClick={() => { setLoadingPoints(true); setPointLoadAttempt((n) => n + 1); }}>{loadingPoints ? 'Loading mapped points…' : 'Retry loading mapped points'}</button>}
       </form>
 
       <div className="room-builder-preview">
-        <svg viewBox={`${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`} className="floorplan-svg">
+        {!embedded && <svg viewBox={`${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`} className="floorplan-svg">
           {roomsOnFloor.map((room) => (
             <polygon
               key={room.id}
@@ -650,20 +739,21 @@ export function RoomBuilder({
               className={room.id === anchorRoomId ? 'room-polygon anchor-room' : 'room-polygon'}
             />
           ))}
-          {vertices.length > 1 && (
+          {recovering && vertices.length > 1 && (
             <polyline points={vertices.map((v) => `${v.x},${v.y}`).join(' ')} className="draft-room-outline" />
           )}
-        </svg>
+          {recovering && pointPreview?.points.map((p) => <circle key={p.id} cx={p.x} cy={p.y} r="0.15"><title>{p.label ?? p.kind}</title></circle>)}
+        </svg>}
         <div className="form-actions room-builder-actions">
           <button
             type="submit"
             form={formId}
-            disabled={!closed || (placementMode === 'anchor' && !anchorValid)}
+            disabled={!closed || !recovering || saving || !pointsLoaded || Boolean(pointPreview?.outside)}
           >
-            {editingRoom ? 'Save room' : 'Create room'}
+            {saving ? 'Saving…' : editingRoom ? 'Save room' : 'Create room'}
           </button>
           {onCancel && (
-            <button type="button" onClick={onCancel}>
+            <button type="button" onClick={onCancel} disabled={saving}>
               Cancel
             </button>
           )}

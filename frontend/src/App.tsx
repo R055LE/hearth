@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { FloorplanView } from './components/FloorplanView';
 import { MaintenanceView } from './components/MaintenanceView';
 import { RoomEditor } from './components/RoomEditor';
 import { PanelEditor } from './components/PanelEditor';
 import './App.css';
+import type { GeometryGuard } from './components/RoomBuilder';
 
 type Tab = 'floorplan' | 'rooms' | 'panels' | 'maintenance';
 
@@ -17,6 +18,7 @@ function tabFromLocation(): Tab {
 }
 
 function App() {
+  const navigationGuard: GeometryGuard = useRef(null);
   const [tab, setTab] = useState<Tab>(tabFromLocation);
   const [roomInitialFloor, setRoomInitialFloor] = useState<string | null>(null);
   const [floorplanTarget, setFloorplanTarget] = useState<{
@@ -28,13 +30,17 @@ function App() {
   useEffect(() => {
     const onHashChange = () => {
       const nextTab = tabFromLocation();
-      setTab(nextTab);
+      if (nextTab === tab) return;
+      const proceed = () => { setTab(nextTab); window.history.replaceState(null, '', `#${nextTab}`); };
+      window.history.replaceState(null, '', `#${tab}`);
+      if (navigationGuard.current) navigationGuard.current(proceed);
+      else proceed();
       if (nextTab !== 'floorplan') setFloorplanTarget(null);
       if (nextTab !== 'rooms') setRoomInitialFloor(null);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [tab]);
 
   function openTab(nextTab: Tab) {
     window.location.hash = nextTab;
@@ -88,13 +94,14 @@ function App() {
       <main>
         {tab === 'floorplan' && (
           <FloorplanView
+            navigationGuard={navigationGuard}
             initialCircuitId={floorplanTarget?.circuitId}
             initialFloor={floorplanTarget?.floor}
             initialWalking={floorplanTarget?.walk}
             onOpenRooms={(floor) => { setRoomInitialFloor(floor); openTab('rooms'); }}
           />
         )}
-        {tab === 'rooms' && <RoomEditor initialFloor={roomInitialFloor} />}
+        {tab === 'rooms' && <RoomEditor navigationGuard={navigationGuard} initialFloor={roomInitialFloor} />}
         {tab === 'panels' && <PanelEditor onViewCircuit={openFloorplan} onMapCircuit={mapCircuit} />}
         <MaintenanceView active={tab === 'maintenance'} />
       </main>

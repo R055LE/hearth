@@ -1,9 +1,11 @@
 def test_floorplan_returns_rooms_and_points_for_floor_only(client):
     main_room = client.post(
-        "/rooms", json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0], [10, 10]]}
+        "/rooms",
+        json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]},
     ).json()
     upstairs_room = client.post(
-        "/rooms", json={"name": "Bedroom", "floor": "upstairs", "polygon": [[0, 0], [5, 5]]}
+        "/rooms",
+        json={"name": "Bedroom", "floor": "upstairs", "polygon": [[0, 0], [5, 0], [5, 5], [0, 5]]},
     ).json()
     panel = client.post("/panels", json={"name": "Main Panel"}).json()
     circuit = client.post(
@@ -40,7 +42,8 @@ def test_floorplan_returns_rooms_and_points_for_floor_only(client):
 
 def test_floorplan_point_resolves_back_to_breaker(client):
     room = client.post(
-        "/rooms", json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0]]}
+        "/rooms",
+        json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]},
     ).json()
     panel = client.post("/panels", json={"name": "Main Panel"}).json()
     circuit = client.post(

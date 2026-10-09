@@ -1,7 +1,11 @@
 def _make_room(client):
     return client.post(
         "/rooms",
-        json={"name": "Utility room", "floor": "basement", "polygon": [[0, 0]]},
+        json={
+            "name": "Utility room",
+            "floor": "basement",
+            "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]],
+        },
     ).json()
 
 

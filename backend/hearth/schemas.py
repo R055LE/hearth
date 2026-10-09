@@ -1,16 +1,26 @@
+import math
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator, model_validator
 
 Point = tuple[float, float]
 
 
+def _serializable_measurement_input(value):
+    # JSON exponents can overflow to inf. Even failed union branches echo their input.
+    if isinstance(value, dict):
+        return {key: _serializable_measurement_input(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_serializable_measurement_input(item) for item in value]
+    return str(value) if isinstance(value, float) and not math.isfinite(value) else value
+
+
 class AbsoluteStart(BaseModel):
     mode: Literal["absolute"]
-    x: float
-    y: float
-    heading_deg: float
+    x: FiniteFloat
+    y: FiniteFloat
+    heading_deg: FiniteFloat
 
 
 class AnchorStart(BaseModel):
@@ -18,23 +28,28 @@ class AnchorStart(BaseModel):
     anchor_room_id: int
     wall_index: int = Field(ge=0)
     corner: Literal["start", "end"]
-    offset_in: float
-    heading_deg: float
+    offset_in: FiniteFloat
+    heading_deg: FiniteFloat
 
 
 MeasurementStart = Annotated[AbsoluteStart | AnchorStart, Field(discriminator="mode")]
 
 
 class CustomTurn(BaseModel):
-    deg: float
+    deg: FiniteFloat
 
 
 class MeasurementWall(BaseModel):
-    length_in: float = Field(gt=0)
+    length_in: FiniteFloat = Field(gt=0)
     turn: Literal["left", "right", "straight"] | CustomTurn
 
 
 class MeasurementSource(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def serializable_input(cls, value):
+        return _serializable_measurement_input(value)
+
     unit: Literal["ft_in"]
     start: MeasurementStart
     walls: list[MeasurementWall] = Field(min_length=3)

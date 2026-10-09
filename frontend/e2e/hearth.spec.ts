@@ -2352,7 +2352,8 @@ test('edits a rectangle on the map and previews mapped-point movement before sav
   const draftOutline = page.locator('.draft-room-polygon');
   await expect(draftOutline).toHaveAttribute('vector-effect', 'non-scaling-stroke');
   expect(await draftOutline.evaluate((element) => getComputedStyle(element).strokeWidth)).toBe('2px');
-  await form.getByRole('textbox', { name: 'Room name' }).fill('Discarded name');
+  await expect(form.getByRole('textbox', { name: 'Room name' })).toHaveCount(0);
+  await form.getByRole('spinbutton', { name: 'Room length in feet' }).fill('12');
   await form.getByRole('button', { name: 'Cancel' }).click();
   expect(state.updatedRoom).toBeNull();
   await expect(page.locator('.floorplan-svg')).toContainText('Garage');
@@ -2360,7 +2361,7 @@ test('edits a rectangle on the map and previews mapped-point movement before sav
   await page.locator('g[aria-label="Room: Garage"]').click();
   await page.getByRole('button', { name: 'Edit room on map' }).click();
   form = page.getByRole('form', { name: 'Edit room' });
-  await form.getByRole('textbox', { name: 'Room name' }).fill('Workshop');
+  await expect(form.getByRole('combobox', { name: 'Room floor' })).toHaveCount(0);
   await form.getByRole('spinbutton', { name: 'Room length in feet' }).fill('20');
   await form.getByRole('spinbutton', { name: 'Room width in feet' }).fill('5');
   const marker = page.locator('[data-point-id="1"]');
@@ -2374,7 +2375,8 @@ test('edits a rectangle on the map and previews mapped-point movement before sav
 
   await form.getByRole('button', { name: 'Save room' }).click();
   await expect.poll(() => state.updatedRoom).not.toBeNull();
-  expect(state.updatedRoom).toMatchObject({ name: 'Workshop' });
+  expect(state.updatedRoom).not.toHaveProperty('name');
+  expect(state.updatedRoom).not.toHaveProperty('floor');
   await expect(marker).toHaveAttribute('cx', previewX!);
   await expect(marker).toHaveAttribute('cy', previewY!);
 });
@@ -2526,7 +2528,8 @@ test('keeps irregular rooms on the measured geometry path', async ({ page }) => 
   await expect(page.getByText('This room uses measured or irregular geometry.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Edit room on map' })).not.toBeVisible();
   await page.getByRole('button', { name: 'Open geometry editor' }).click();
-  await expect(page).toHaveURL(/#rooms$/);
+  await expect(page.getByRole('heading', { name: 'Floorplan', exact: true })).toBeVisible();
+  await expect(page.getByText(/Saved measurements or the anchor no longer match/)).toBeVisible();
 });
 
 test('requires confirmation before deleting a point', async ({ page }) => {

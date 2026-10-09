@@ -86,3 +86,40 @@ export function suggestedRectangleOrigin(rooms: Room[]): Point {
   const ys = rooms.flatMap((room) => room.polygon.map(([, y]) => y));
   return [Math.max(...xs) + 2, Math.min(...ys)];
 }
+
+export function polygonError(polygon: Point[]): string | null {
+  if (polygon.length < 3 || polygon.some((p) => p.some((n) => !Number.isFinite(n)))) return 'Use at least three finite vertices.';
+  if (new Set(polygon.map((p) => JSON.stringify(p))).size !== polygon.length) return 'Vertices and edges must not repeat; closure is implicit.';
+  const cross = (a: Point, b: Point, c: Point) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const edges = polygon.map((a, i) => [a, polygon[(i + 1) % polygon.length]]);
+  const area = edges.reduce((sum, [a, b]) => sum + a[0] * b[1] - b[0] * a[1], 0);
+  if (!Number.isFinite(area) || Math.abs(area) < 1e-9) return 'The room must have nonzero finite area.';
+  for (let i = 0; i < edges.length; i++) {
+    const [a, b] = edges[i];
+    const c = edges[(i + 1) % edges.length][1];
+    if (pointOnSegment(c, a, b) || pointOnSegment(a, b, c)) return 'Edges must not overlap.';
+    for (let j = i + 1; j < edges.length; j++) {
+      if (j === i + 1 || (i === 0 && j === edges.length - 1)) continue;
+      const [c, d] = edges[j];
+      if ((cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0) ||
+          pointOnSegment(c, a, b) || pointOnSegment(d, a, b) || pointOnSegment(a, c, d) || pointOnSegment(b, c, d)) return 'The room must not self-intersect.';
+    }
+  }
+  return null;
+}
+
+export function previewRoomPoints<T extends { x: number; y: number }>(old: Point[], proposed: Point[], points: T[]) {
+  const dx = proposed[0][0] - (old[0]?.[0] ?? 0);
+  const dy = proposed[0][1] - (old[0]?.[1] ?? 0);
+  const translation = old.length === proposed.length && old.every(([x, y], i) =>
+    Math.abs(proposed[i][0] - x - dx) < 1e-9 && Math.abs(proposed[i][1] - y - dy) < 1e-9);
+  const from = axisAlignedRectangle(old);
+  const to = axisAlignedRectangle(proposed);
+  const policy = translation ? 'translation' : from && to ? 'resize' : 'fixed';
+  const mapped = points.map((point) => {
+    const [x, y] = translation ? [point.x + dx, point.y + dy] : from && to
+      ? mapPointBetweenRectangles([point.x, point.y], from, to) : [point.x, point.y];
+    return { ...point, x, y };
+  });
+  return { points: mapped, policy, outside: policy === 'fixed' && mapped.some((p) => !pointInPolygon([p.x, p.y], proposed)) };
+}

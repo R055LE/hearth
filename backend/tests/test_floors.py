@@ -10,7 +10,8 @@ def test_empty_floor_lifecycle_and_room_creation(client):
     assert client.get("/floorplan/Attic").json() == {"rooms": [], "circuit_points": []}
 
     room = client.post(
-        "/rooms", json={"name": "Storage", "floor": "Attic", "polygon": [[0, 0]]}
+        "/rooms",
+        json={"name": "Storage", "floor": "Attic", "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]},
     ).json()
     assert client.delete(f"/floors/{floor['id']}").status_code == 409
     assert client.get(f"/rooms/{room['id']}").json() == room
@@ -39,7 +40,8 @@ def test_rename_preserves_room_geometry_and_all_linked_records(client):
         for name in ("Kitchen", "Utility")
     ]
     other_room = client.post(
-        "/rooms", json={"name": "Bedroom", "floor": "upper", "polygon": [[0, 0]]}
+        "/rooms",
+        json={"name": "Bedroom", "floor": "upper", "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]},
     ).json()
     panel = client.post("/panels", json={"name": "Panel", "room_id": rooms[0]["id"]}).json()
     circuit = client.post(
@@ -83,7 +85,8 @@ def test_rename_preserves_room_geometry_and_all_linked_records(client):
 def test_blank_and_duplicate_names_leave_floor_and_rooms_unchanged(client):
     floor = client.get("/floors").json()[0]
     room = client.post(
-        "/rooms", json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0]]}
+        "/rooms",
+        json={"name": "Kitchen", "floor": "main", "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]},
     ).json()
     other = client.post("/floors", json={"name": "Upper"}).json()
     for name in ("", "  "):
@@ -109,7 +112,12 @@ def test_rename_rejects_collision_between_legacy_case_variants(client, migrated_
 
 def test_room_api_keeps_floor_records_for_older_clients(client):
     room = client.post(
-        "/rooms", json={"name": "Storage", "floor": " basement ", "polygon": [[0, 0]]}
+        "/rooms",
+        json={
+            "name": "Storage",
+            "floor": " basement ",
+            "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]],
+        },
     ).json()
     assert room["floor"] == "basement"
     assert {floor["name"] for floor in client.get("/floors").json()} == {"main", "basement"}
