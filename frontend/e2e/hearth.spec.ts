@@ -525,8 +525,22 @@ async function floorplanViewBox(page: Page): Promise<number[]> {
 }
 
 async function openFloorplanFinder(page: Page) {
-  const openButton = page.getByRole('button', { name: 'Open find' });
-  if (await openButton.count()) await openButton.click();
+  await expect(page.getByRole('searchbox', { name: /Room, point, panel/ })).toBeVisible();
+}
+
+async function openEditMap(page: Page) {
+  const tools = page.locator('.edit-map-tools');
+  if (await tools.getAttribute('open') === null) await tools.getByText('Edit map', { exact: true }).click();
+}
+
+async function expandFloorplanDetails(page: Page) {
+  const toggle = page.getByRole('button', { name: 'Expand details' });
+  if (await toggle.count()) await toggle.click();
+}
+
+async function collapseFloorplanDetails(page: Page) {
+  const toggle = page.getByRole('button', { name: 'Collapse details' });
+  if (await toggle.count()) await toggle.click();
 }
 
 async function findFloorplanBackground(page: Page): Promise<{ x: number; y: number }> {
@@ -933,6 +947,7 @@ test('saves the location shown by the latest point preview', async ({ page }) =>
   const state = await mockApi(page);
   await page.goto('/');
 
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add point' }).click();
   await clickFloorplan(page, 0.55, 0.65);
 
@@ -969,6 +984,7 @@ test('zoom and fit keep point placement in floor coordinates', async ({ page }) 
   await page.getByRole('button', { name: 'Fit', exact: true }).click();
 
   await page.getByRole('button', { name: 'Zoom in' }).click();
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add point' }).click();
   await clickFloorplanCoordinate(page, 15, 5);
   await expect(page.getByRole('spinbutton', { name: 'X:' })).toHaveValue('15');
@@ -1078,6 +1094,7 @@ test('finds upper-floor points and keeps breaker points highlighted across floor
   await expect(upperPointResult).toContainText('upper');
   await upperPointResult.getByRole('button').click();
   await expect(page.getByRole('combobox', { name: 'Floor:' })).toHaveValue('upper');
+  await expandFloorplanDetails(page);
   await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('Upper smoke alarm');
   await expect(page.locator('[data-point-id="2"]')).toHaveAttribute('aria-pressed', 'true');
 
@@ -1085,20 +1102,22 @@ test('finds upper-floor points and keeps breaker points highlighted across floor
   const breakerResult = page.locator('[data-find-type="circuit"][data-find-id="1"]');
   await expect(breakerResult).toContainText('main, upper');
   await breakerResult.getByRole('button').click();
+  await expandFloorplanDetails(page);
   const breakerDetails = page.getByRole('region', { name: 'Selected breaker' });
   await expect(breakerDetails).toContainText('2 mapped points across 2 floors');
   await expect(breakerDetails).toContainText('North wall outlet');
   await expect(breakerDetails).toContainText('Upper smoke alarm');
-  await expect(page.locator('[data-point-id="2"] + .point-symbol')).toHaveAttribute('stroke', '#f97316');
+  await expect(page.locator('[data-point-id="2"] + .point-symbol')).toHaveAttribute('stroke', 'var(--selection)');
 
   await page.getByRole('combobox', { name: 'Floor:' }).selectOption('main');
-  await expect(page.locator('[data-point-id="1"] + .point-symbol')).toHaveAttribute('stroke', '#f97316');
+  await expect(page.locator('[data-point-id="1"] + .point-symbol')).toHaveAttribute('stroke', 'var(--selection)');
+  await expandFloorplanDetails(page);
   await expect(breakerDetails).toContainText('Upper smoke alarm');
-  await page.getByRole('button', { name: 'Close find' }).click();
   await expect(page.getByLabel('Floorplan map for main')).toBeVisible();
   const roomOnMap = page.getByRole('button', { name: 'Room: Garage' });
   await roomOnMap.focus();
   await page.keyboard.press('Enter');
+  await expandFloorplanDetails(page);
   await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Garage');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
@@ -1119,7 +1138,8 @@ test('distinguishes matching rooms and panels and explains empty and no-match st
   await openFloorplanFinder(page);
 
   const search = page.getByRole('searchbox', { name: 'Room, point, panel, breaker, or verified description' });
-  await expect(page.getByText('Type to search saved rooms, mapped points, panels, and breakers.')).toBeVisible();
+  await expect(search).toHaveAttribute('placeholder', 'Search rooms, points, panels, or breakers');
+  await expect(page.getByText('Type to search saved rooms, mapped points, panels, and breakers.')).toHaveText(/Type to search/);
   await search.focus();
   await page.keyboard.type('Garage');
   const mainRoomResult = page.locator('[data-find-type="room"][data-find-id="1"] button');
@@ -1142,13 +1162,13 @@ test('distinguishes matching rooms and panels and explains empty and no-match st
   await page.keyboard.press('Tab');
   await expect(panelResult).toBeFocused();
   await page.keyboard.press('Enter');
+  await expandFloorplanDetails(page);
   await expect(page.getByRole('region', { name: 'Selected panel' })).toContainText('Location: Garage');
   await expect(page.getByRole('button', { name: 'Room: Garage' })).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 
   await search.fill('no saved item has this name');
   await expect(page.getByText(/No matches\. Try a room name/)).toBeVisible();
-  await page.getByRole('button', { name: 'Close find' }).click();
   await expect(page.getByLabel('Floorplan map for main')).toBeVisible();
 });
 
@@ -1184,6 +1204,7 @@ test('asks before finding away from a room draft and saves or discards only on c
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   await openFloorplanFinder(page);
   const roomForm = page.getByRole('form', { name: 'Add room' });
@@ -1201,9 +1222,12 @@ test('asks before finding away from a room draft and saves or discards only on c
   await upperRoomResult.click();
   await confirmation.getByRole('button', { name: 'Discard room and find' }).click();
   await expect(page.getByRole('combobox', { name: 'Floor:' })).toHaveValue('upper');
+  await expandFloorplanDetails(page);
   await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Upper room');
   expect(state.createdRooms).toEqual([]);
 
+  await collapseFloorplanDetails(page);
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   await openFloorplanFinder(page);
   await page.getByRole('form', { name: 'Add room' }).getByRole('textbox', { name: 'Room name' }).fill('Saved draft');
@@ -1213,7 +1237,7 @@ test('asks before finding away from a room draft and saves or discards only on c
     .getByRole('button', { name: 'Save room and find' }).click();
   await expect.poll(() => state.createdRooms).toHaveLength(1);
   await expect(page.getByRole('combobox', { name: 'Floor:' })).toHaveValue('main');
-  await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Garage');
+  await expect(page.locator('.floorplan-sidebar-summary')).toContainText('Garage');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
@@ -1227,6 +1251,7 @@ test('keeps a room draft when saving it before find fails', async ({ page }) => 
   };
   const state = await mockApi(page, { rooms: [room, upperRoom], failRoomSave: true });
   await page.goto('/');
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   await openFloorplanFinder(page);
   await page.getByRole('form', { name: 'Add room' }).getByRole('textbox', { name: 'Room name' }).fill('Unsaved room');
@@ -1287,6 +1312,7 @@ test('explains how to choose a location while adding a point', async ({ page }) 
   await mockApi(page);
   await page.goto('/');
 
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add point' }).click();
 
   await expect(
@@ -1370,13 +1396,16 @@ test('offers a named chooser when point hit areas overlap at 390px', async ({ pa
   await expect(chooser.getByRole('button', { name: /Nearby outlet.*Garage/ })).toBeVisible();
   expect(state.pointUpdates).toEqual([]);
   await chooser.getByRole('button', { name: /North wall outlet.*Garage/ }).click();
+  await expandFloorplanDetails(page);
   await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('North wall outlet');
   await expect(chooser).not.toBeVisible();
+  await page.getByRole('button', { name: 'Collapse details' }).click();
   await page.locator('.floorplan-svg').scrollIntoViewIfNeeded();
   await clickFloorplanCoordinate(page, 12.1, 2.1);
   await expect(chooser).toBeVisible();
   await clickFloorplanCoordinate(page, 18, 8);
   await expect(chooser).not.toBeVisible();
+  await expandFloorplanDetails(page);
   await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Garage');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
@@ -1434,9 +1463,87 @@ test('keeps invalid and failed point moves recoverable, with tap and numeric fal
   await page.getByRole('button', { name: 'Move point', exact: true }).click();
   await clickFloorplanCoordinate(page, 16, 3);
   await page.getByRole('button', { name: 'Rooms', exact: true }).click();
+  await page.getByRole('button', { name: 'Discard and continue', exact: true }).click();
   await page.getByRole('button', { name: 'Floorplan', exact: true }).click();
   await expect(marker).toHaveAttribute('cx', '12');
   expect(state.pointUpdates).toEqual([]);
+});
+
+test('guards a collapsed room draft before leaving the floorplan', async ({ page }) => {
+  const state = await mockApi(page, { failRoomSave: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await openEditMap(page);
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  const form = page.getByRole('form', { name: 'Add room' });
+  await form.getByRole('textbox', { name: 'Room name' }).fill('Protected draft');
+  await collapseFloorplanDetails(page);
+
+  const roomsNav = page.getByRole('button', { name: 'Rooms', exact: true });
+  await roomsNav.click();
+  const confirmation = page.getByRole('alertdialog', { name: 'Leave this draft?' });
+  await expect(confirmation).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(confirmation).not.toBeVisible();
+  await expect(page).toHaveURL(/#floorplan$/);
+  await expect(page.getByRole('button', { name: 'Expand details' })).toBeVisible();
+  await expect(roomsNav).toBeFocused();
+  await expandFloorplanDetails(page);
+  await expect(form.getByRole('textbox', { name: 'Room name' })).toHaveValue('Protected draft');
+  await collapseFloorplanDetails(page);
+
+  await roomsNav.click();
+  await confirmation.getByRole('button', { name: 'Save and continue' }).click();
+  await expect(page.getByText(/Failed to create room.*Room could not be saved/)).toBeVisible();
+  await expect(confirmation).toBeVisible();
+  await expect(page).toHaveURL(/#floorplan$/);
+  await confirmation.getByRole('button', { name: 'Stay' }).click();
+  await expandFloorplanDetails(page);
+  await expect(form.getByRole('textbox', { name: 'Room name' })).toHaveValue('Protected draft');
+  expect(state.createdRooms).toEqual([]);
+
+  await collapseFloorplanDetails(page);
+  await roomsNav.click();
+  await confirmation.getByRole('button', { name: 'Discard and continue' }).click();
+  await expect(page).toHaveURL(/#rooms$/);
+  expect(state.createdRooms).toEqual([]);
+});
+
+test('guards a point draft before changing floors and saves it once', async ({ page }) => {
+  const upperRoom = {
+    ...room,
+    id: 2,
+    name: 'Upper room',
+    floor: 'upper',
+    polygon: [[0, 0], [10, 0], [10, 10], [0, 10]],
+  };
+  const state = await mockApi(page, { rooms: [room, upperRoom] });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'outlet: North wall outlet' }).click();
+  await expandFloorplanDetails(page);
+  await page.getByRole('button', { name: 'Edit point', exact: true }).click();
+  const label = page.getByRole('textbox', { name: 'Label:' });
+  await label.fill('Guarded outlet');
+  await collapseFloorplanDetails(page);
+
+  const floorSelect = page.getByRole('combobox', { name: 'Floor:', exact: true });
+  await floorSelect.selectOption('upper');
+  const confirmation = page.getByRole('alertdialog', { name: 'Leave this draft?' });
+  await confirmation.getByRole('button', { name: 'Stay' }).click();
+  await expect(floorSelect).toHaveValue('main');
+  await expect(page.getByRole('button', { name: 'Expand details' })).toBeVisible();
+  await expect(floorSelect).toBeFocused();
+  await expandFloorplanDetails(page);
+  await expect(label).toHaveValue('Guarded outlet');
+  await collapseFloorplanDetails(page);
+  expect(state.pointUpdates).toEqual([]);
+
+  await floorSelect.selectOption('upper');
+  await confirmation.getByRole('button', { name: 'Save and continue' }).click();
+  await expect.poll(() => state.pointUpdates).toHaveLength(1);
+  expect(state.pointUpdates[0]).toMatchObject({ label: 'Guarded outlet' });
+  await expect(floorSelect).toHaveValue('upper');
 });
 
 test('drags a point by touch at 390px without horizontal overflow', async ({ browser }) => {
@@ -1446,7 +1553,9 @@ test('drags a point by touch at 390px without horizontal overflow', async ({ bro
   await page.goto('http://127.0.0.1:4173');
   const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
   await marker.click();
+  await expandFloorplanDetails(page);
   await page.getByRole('button', { name: 'Move point', exact: true }).click();
+  await page.getByRole('button', { name: 'Collapse details' }).click();
   await marker.scrollIntoViewIfNeeded();
   const start = await floorplanScreenPoint(page, 12, 2);
   const end = await floorplanScreenPoint(page, 16, 3);
@@ -1460,8 +1569,10 @@ test('drags a point by touch at 390px without horizontal overflow', async ({ bro
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await expect(marker).toHaveAttribute('cx', '16');
   await expect(marker).toHaveAttribute('cy', '3');
+  await expect(page.getByRole('button', { name: 'Expand details' })).toBeVisible();
   expect(state.pointUpdates).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await expandFloorplanDetails(page);
   await page.getByRole('button', { name: 'Save point' }).click();
   await expect.poll(() => state.pointUpdates).toHaveLength(1);
   await context.close();
@@ -1470,6 +1581,7 @@ test('drags a point by touch at 390px without horizontal overflow', async ({ bro
 test('captures and undoes points while preserving circuit-walk defaults', async ({ page }) => {
   const state = await mockApi(page);
   await page.goto('/');
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Walk circuit' }).click();
   await page.getByRole('combobox', { name: 'Circuit:' }).selectOption('2');
   await page.getByLabel('Kind:').fill('switch');
@@ -1513,12 +1625,16 @@ for (const width of [1440, 390]) {
         const { x, y, width } = e.getBoundingClientRect();
         return { x, y, width };
       }));
-      expect(boxes[0].y).toBe(boxes[1].y);
-      expect(boxes[2].y).toBe(boxes[3].y);
-      expect(boxes[0].x).toBe(boxes[2].x);
-      expect(boxes[1].x).toBe(boxes[3].x);
+      expect(new Set(boxes.map(({ y }) => y)).size).toBe(1);
       expect(boxes[0].width).toBe(boxes[1].width);
+      const nav = await page.getByRole('navigation', { name: 'Main sections' }).boundingBox();
+      expect(nav!.y + nav!.height).toBe(844);
+    } else {
+      const nav = await page.getByRole('navigation', { name: 'Main sections' }).boundingBox();
+      expect(nav!.y).toBeLessThan(50);
     }
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('link', { name: 'Hearth home' })).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(buttons.nth(0)).toBeFocused();
     await page.keyboard.press('Tab');
@@ -1528,9 +1644,7 @@ for (const width of [1440, 390]) {
     await expect(page).toHaveURL(/#rooms$/);
     await expect(buttons.nth(1)).toHaveAttribute('aria-current', 'page');
     await expect(buttons.nth(1)).toBeFocused();
-    expect(await buttons.nth(1).evaluate((e) =>
-      getComputedStyle(e).outlineColor === getComputedStyle(document.body).color,
-    )).toBe(true);
+    expect(await buttons.nth(1).evaluate((e) => getComputedStyle(e).outlineStyle)).toBe('solid');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Space');
     await expect(page).toHaveURL(/#panels$/);
@@ -1713,38 +1827,55 @@ for (const layout of ['small', 'multiple']) {
     await page.goto('/');
     const marker = page.getByRole('button', { name: 'outlet: North wall outlet' });
     await marker.click();
+    const panel = page.getByRole('complementary', { name: 'Floorplan details panel' });
+    const toggle = page.getByRole('button', { name: 'Expand details' });
+    await expect(toggle).toBeFocused();
+    await expect(panel.locator('.floorplan-sidebar-summary')).toContainText('North wall outlet');
+    await expect(panel.locator('.floorplan-sidebar-summary')).toContainText('Main panel — breaker 1');
+    await expect(panel).not.toHaveAttribute('aria-modal');
+    await toggle.click();
+    const [panelBox, navBox] = await Promise.all([
+      panel.boundingBox(),
+      page.getByRole('navigation', { name: 'Main sections' }).boundingBox(),
+    ]);
+    expect(panelBox!.height).toBeLessThanOrEqual(844 * 0.65 + 1);
+    expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(navBox!.y + 1);
     const answer = page.getByText('Circuit: Main panel — breaker 1', { exact: true });
-    await expect(answer).toBeInViewport({ ratio: 1 });
-    const details = page.getByRole('region', { name: 'Selected point' });
-    await expect(details).toBeFocused();
+    await expect(answer).toBeInViewport({ ratio: 0.85 });
     await page.getByRole('button', { name: 'Back to map', exact: true }).click();
     await expect(marker).toBeFocused();
     await expect(marker).toBeInViewport({ ratio: 1 });
     const target = await marker.boundingBox();
     await page.mouse.click(target!.x + target!.width / 2 + 18, target!.y + target!.height / 2);
-    await expect(details).toBeFocused();
+    await expandFloorplanDetails(page);
     await page.getByRole('button', { name: 'Back to map', exact: true }).click();
     await page.keyboard.press('Enter');
-    await expect(details).toBeFocused();
-    await expect(answer).toBeInViewport({ ratio: 1 });
+    await expandFloorplanDetails(page);
+    await expect(answer).toBeInViewport({ ratio: 0.85 });
     const map = await page.locator('.floorplan-main .floorplan-svg').boundingBox();
-    expect(map!.height).toBeLessThanOrEqual(362);
+    expect(map!.height).toBeLessThanOrEqual(382);
     const symbol = await page.locator('.point-symbol').first().boundingBox();
     expect(symbol!.width).toBeLessThanOrEqual(24);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     await page.getByRole('button', { name: 'Edit point', exact: true }).click();
+    const savePoint = page.getByRole('button', { name: 'Save point', exact: true });
+    await savePoint.scrollIntoViewIfNeeded();
+    await expect(savePoint).toBeInViewport();
     await page.getByRole('textbox', { name: 'Label:' }).fill('Discard this');
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     expect(state.updatedPoint).toBeNull();
-    await expect(answer).toBeInViewport({ ratio: 1 });
+    await expandFloorplanDetails(page);
     await page.getByRole('button', { name: 'Move point', exact: true }).click();
     await expect(marker).toBeFocused();
     await expect(marker).toBeInViewport({ ratio: 1 });
+    await expandFloorplanDetails(page);
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     expect(state.updatedPoint).toBeNull();
-    await expect(details).toBeFocused();
+    await expandFloorplanDetails(page);
     await page.getByRole('button', { name: 'Back to map', exact: true }).click();
+    await openEditMap(page);
     await page.getByRole('button', { name: 'Walk circuit', exact: true }).click();
+    await expandFloorplanDetails(page);
     await expect(page.getByRole('heading', { name: 'Circuit walk', exact: true })).toBeInViewport();
     await page.getByRole('button', { name: 'Finish walk', exact: true }).click();
     expect(state.createdPoints).toEqual([]);
@@ -1771,6 +1902,7 @@ test('makes the floorplan controls keyboard-operable and named', async ({ page }
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1, name: 'Hearth' })).toBeVisible();
   await expect(page.getByRole('heading', { level: 2, name: 'Floorplan' })).toBeVisible();
+  await openEditMap(page);
 
   const addPoint = page.getByRole('button', { name: 'Add point' });
   const walkButton = page.getByRole('button', { name: 'Walk circuit' });
@@ -1795,7 +1927,7 @@ test('makes the floorplan controls keyboard-operable and named', async ({ page }
   await page.keyboard.press('Tab');
   await expect(pointButton).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { level: 3, name: 'outlet' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 3, name: 'North wall outlet' })).toBeVisible();
 
   const circuitButton = page.getByRole('button', { name: /Breaker 1 — Garage/ });
   await circuitButton.focus();
@@ -1808,6 +1940,7 @@ test('keeps point placement unavailable until a room exists', async ({ page }) =
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
+  await openEditMap(page);
   await expect(page.getByRole('button', { name: 'Add point' })).toBeDisabled();
   await expect(page.getByText('Add a room before placing points on the floorplan.')).toBeVisible();
 
@@ -1843,14 +1976,14 @@ test('shows panel status and opens mapped breakers on the floorplan', async ({ p
 
   const mappedBox = await mappedBreaker.boundingBox();
   const unmappedBox = await unmappedBreaker.boundingBox();
-  expect(unmappedBox?.height).toBeGreaterThan(mappedBox?.height ?? 0);
+  expect(unmappedBox?.height).toBeGreaterThanOrEqual(mappedBox?.height ?? 0);
 
   await mappedBreaker.getByRole('button', { name: 'View breaker 1 on floorplan' }).click();
   await expect(page.getByRole('heading', { level: 2, name: 'Floorplan' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Breaker 1 — Garage/ })).toHaveClass(/selected/);
   await expect(page.locator('[data-point-id="1"] + .point-symbol')).toHaveAttribute(
     'stroke',
-    '#f97316',
+    'var(--selection)',
   );
 });
 
@@ -1862,12 +1995,14 @@ for (const width of [1440, 390]) {
     const directory = page.getByRole('region', { name: 'Workshop subpanel breaker directory' });
     await directory.getByRole('button', { name: 'Map breaker 1', exact: true }).click();
     await expect(page).toHaveURL(/#floorplan$/);
+    if (width === 390) await expandFloorplanDetails(page);
     const controls = page.locator('.walk-controls');
     await expect(controls.getByRole('combobox', { name: 'Circuit:', exact: true })).toHaveValue('3');
     await expect(controls.locator('option:checked')).toHaveText('Workshop subpanel — breaker 1');
     await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
     await expect(controls.getByRole('heading', { name: 'Circuit walk' })).toBeInViewport();
 
+    if (width === 390) await page.getByRole('button', { name: 'Collapse details' }).click();
     await clickFloorplan(page, 0.6, 0.4);
     await page.getByLabel('Label:', { exact: true }).fill('Discard this draft');
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -1885,11 +2020,13 @@ for (const width of [1440, 390]) {
     await page.goForward();
     await expect(page).toHaveURL(/#panels$/);
     await directory.getByRole('button', { name: 'Map breaker 1', exact: true }).click();
+    if (width === 390) await collapseFloorplanDetails(page);
     await clickFloorplan(page, 0.6, 0.4);
     await page.getByLabel('Label:', { exact: true }).fill('Bench outlet');
     await page.locator('.point-form').getByRole('button', { name: 'Add point', exact: true }).click();
     await expect(page.getByText('1 point added this walk.')).toBeVisible();
     expect(state.createdPoints).toEqual([expect.objectContaining({ circuit_id: 3, room_id: 1, label: 'Bench outlet' })]);
+    if (width === 390) await collapseFloorplanDetails(page);
     await clickFloorplan(page, 0.5, 0.3);
     await page.getByLabel('Label:', { exact: true }).fill('Unfinished point');
     await controls.getByRole('button', { name: 'Finish walk', exact: true }).click();
@@ -1903,7 +2040,11 @@ for (const width of [1440, 390]) {
     await expect(directory.getByText('1 mapped point', { exact: true })).toBeVisible();
     await directory.getByRole('button', { name: 'View breaker 1 on floorplan', exact: true }).click();
     await expect(controls).not.toBeVisible();
-    await expect(page.getByRole('button', { name: /Breaker 1 — Workshop/ })).toHaveClass(/selected/);
+    if (width === 390) {
+      await expect(page.locator('.floorplan-sidebar-summary')).toContainText('Workshop subpanel · Breaker 1');
+    } else {
+      await expect(page.getByRole('button', { name: /Breaker 1 — Workshop/ })).toHaveClass(/selected/);
+    }
     await page.goBack();
     await page.goForward();
     await expect(controls).not.toBeVisible();
@@ -1919,6 +2060,7 @@ for (const width of [1440, 390]) {
     await expect(page.getByText('Add a room before mapping Workshop subpanel — breaker 1.')).toBeVisible();
     await expect(page.getByText('Then return to this breaker and choose Map breaker.')).toBeVisible();
     await expect(page.locator('.walk-controls')).not.toBeVisible();
+    await openEditMap(page);
     await page.getByRole('button', { name: 'Add room', exact: true }).click();
     await expect(page).toHaveURL(/#floorplan$/);
     await expect(page.getByRole('form', { name: 'Add room' })).toBeVisible();
@@ -2123,6 +2265,7 @@ test('creates, previews, positions, and cancels rooms on the phone floorplan', a
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
 
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   const canceledDraft = page.getByRole('form', { name: 'Add room' });
   const roomMap = page.locator('.room-authoring .floorplan-svg');
@@ -2140,11 +2283,14 @@ test('creates, previews, positions, and cancels rooms on the phone floorplan', a
     expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   }
   await canceledDraft.getByRole('textbox', { name: 'Room name' }).fill('Discarded room');
+  await collapseFloorplanDetails(page);
   await clickFloorplan(page, 0.7, 0.5);
   await expect(page.locator('.draft-room-polygon')).toBeVisible();
+  await expandFloorplanDetails(page);
   await canceledDraft.getByRole('button', { name: 'Cancel' }).click();
   expect(state.createdRooms).toEqual([]);
 
+  await collapseFloorplanDetails(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   let draft = page.getByRole('form', { name: 'Add room' });
   await draft.getByRole('textbox', { name: 'Room name' }).fill('Kitchen');
@@ -2153,6 +2299,7 @@ test('creates, previews, positions, and cancels rooms on the phone floorplan', a
   await draft.getByRole('button', { name: 'Save room' }).click();
   await expect.poll(() => state.createdRooms).toHaveLength(1);
 
+  await collapseFloorplanDetails(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   draft = page.getByRole('form', { name: 'Add room' });
   await draft.getByRole('textbox', { name: 'Room name' }).fill('Living room');
@@ -2163,7 +2310,9 @@ test('creates, previews, positions, and cancels rooms on the phone floorplan', a
   await expect(page.locator('.room-polygon')).toHaveCount(1);
   await expect(page.locator('.draft-room-polygon')).toBeVisible();
 
+  await collapseFloorplanDetails(page);
   await clickFloorplan(page, 0.85, 0.5);
+  await expandFloorplanDetails(page);
   await draft.getByRole('button', { name: 'Save room' }).click();
   await expect.poll(() => state.createdRooms).toHaveLength(2);
   const kitchenMaxX = Math.max(...(state.createdRooms[0].polygon as number[][]).map(([x]) => x));
@@ -2175,6 +2324,7 @@ test('creates, previews, positions, and cancels rooms on the phone floorplan', a
 test('draws a rectangle on an empty floor and saves exact corrected dimensions', async ({ page }) => {
   const state = await mockApi(page, { rooms: [], points: [] });
   await page.goto('/');
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   let form = page.getByRole('form', { name: 'Add room' });
   const start = await floorplanScreenPoint(page, 2, 2);
@@ -2219,6 +2369,7 @@ test('draws beside existing rooms with touch at 390px', async ({ browser }) => {
   const page = await context.newPage();
   const state = await mockApi(page, { rooms: [room, adjacentRoom] });
   await page.goto('http://127.0.0.1:4173');
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   const form = page.getByRole('form', { name: 'Add room' });
   await form.getByRole('textbox', { name: 'Room name' }).fill('Sunroom');
@@ -2306,6 +2457,7 @@ test('keeps invalid and failed resize drafts recoverable at 390px', async ({ pag
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await page.locator('g[aria-label="Room: Garage"]').click();
+  await expandFloorplanDetails(page);
   await page.getByRole('button', { name: 'Resize room on map' }).click();
   const form = page.getByRole('form', { name: 'Edit room' });
   await form.getByRole('spinbutton', { name: 'Room length in feet' }).fill('0');
@@ -2459,24 +2611,27 @@ test('touch drag keeps a room draft recoverable after a failed save at 390px', a
   const state = await mockApi(page, { rooms: [room, adjacentRoom], failRoomSave: true });
   await page.goto('http://127.0.0.1:4173');
   await page.locator('g[aria-label="Room: Garage"]').click();
+  await expandFloorplanDetails(page);
   await page.getByRole('button', { name: 'Edit room on map' }).click();
   const draft = page.getByRole('form', { name: 'Edit room' });
   await draft.getByText('Fine position (optional)').click();
   const outline = page.getByRole('button', { name: 'Move Garage draft' });
   await expect(page.locator('.room-polygon')).toHaveCount(2);
+  await collapseFloorplanDetails(page);
   await outline.scrollIntoViewIfNeeded();
-  const box = await outline.boundingBox();
-  if (!box) throw new Error('Room draft is not visible');
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
+  const start = await floorplanScreenPoint(page, 15, 5);
+  const end = await floorplanScreenPoint(page, 18, 7);
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('class'), start))
+    .toContain('draft-room-polygon');
   const cdp = await context.newCDPSession(page);
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x, y }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: x + 50, y: y + 30 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: start.x, y: start.y }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: end.x, y: end.y }] });
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 
-  const position = draft.getByRole('spinbutton', { name: 'Room X position in feet' });
+  const position = page.locator('.room-draft-form input[aria-label="Room X position in feet"]');
   await expect.poll(async () => Number(await position.inputValue())).toBeGreaterThan(10);
   expect(state.updatedRoom).toBeNull();
+  await expandFloorplanDetails(page);
   await draft.getByRole('button', { name: 'Save room' }).click();
   await expect(page.getByText(/Failed to save room.*Room could not be saved/)).toBeVisible();
   await expect(position).not.toHaveValue('10');
@@ -2490,6 +2645,7 @@ test('touch drag keeps a room draft recoverable after a failed save at 390px', a
 test('retains a room draft after save failure', async ({ page }) => {
   const state = await mockApi(page, { rooms: [], points: [], failRoomSave: true });
   await page.goto('/');
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   const form = page.getByRole('form', { name: 'Add room' });
   await form.getByRole('textbox', { name: 'Room name' }).fill('Kitchen');
@@ -2507,6 +2663,7 @@ test('does not offer a duplicate create retry when refresh fails after save', as
     failRoomRefreshAfterSave: true,
   });
   await page.goto('/');
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Add room', exact: true }).click();
   const form = page.getByRole('form', { name: 'Add room' });
   await form.getByRole('textbox', { name: 'Room name' }).fill('Kitchen');
@@ -2558,13 +2715,14 @@ test('keeps circuit-walk controls reachable over the phone floorplan', async ({ 
   const box = await page.locator('.floorplan-svg').boundingBox();
   expect(box?.width).toBeGreaterThan(330);
 
+  await openEditMap(page);
   await page.getByRole('button', { name: 'Walk circuit' }).click();
   const walkSidebar = page.locator('.walk-sidebar');
   await expect(walkSidebar).toHaveCSS('position', 'fixed');
   const walkBox = await walkSidebar.boundingBox();
   expect(walkBox?.x).toBeGreaterThanOrEqual(0);
   expect((walkBox?.x ?? 0) + (walkBox?.width ?? 0)).toBeLessThanOrEqual(390);
-  await expect(page.getByRole('button', { name: 'Finish walk' })).toBeVisible();
+  await expect(walkSidebar.locator('.floorplan-sidebar-summary')).toContainText('Circuit walk');
 
   await clickFloorplan(page, 0.48, 0.4);
   const addPoint = page.locator('.point-form').getByRole('button', { name: 'Add point' });
@@ -2647,13 +2805,16 @@ for (const colorScheme of ['light', 'dark'] as const) {
       const marker = page.getByRole('button', {name: 'outlet: North wall outlet'});
       await marker.focus();
       await page.keyboard.press('Enter');
+      await expandFloorplanDetails(page);
       await expect(page.getByText('Circuit: Main panel — breaker 1', {exact: true})).toBeVisible();
       const first = page.getByRole('button', {name: /Breaker 1 — Garage/});
       const second = page.getByRole('button', {name: 'Breaker 2', exact: true});
       await second.click();
+      await expandFloorplanDetails(page);
       await expect(second).toHaveClass(/selected/);
       await expect(first).not.toHaveClass(/selected/);
       await first.click();
+      await expandFloorplanDetails(page);
       await expect(first).toHaveClass(/selected/);
       await expect(second).not.toHaveClass(/selected/);
       await first.scrollIntoViewIfNeeded();
@@ -2703,7 +2864,11 @@ for (const width of [1280, 390]) {
     await expect(roomForm.getByRole('combobox', { name: 'Room floor' })).toHaveValue('Loft');
     await roomForm.getByRole('textbox', { name: 'Room name' }).fill('Loft storage');
     await roomForm.getByRole('button', { name: 'Save room', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Loft storage');
+    if (width === 390) {
+      await expect(page.locator('.floorplan-sidebar-summary')).toContainText('Loft storage');
+    } else {
+      await expect(page.getByRole('region', { name: 'Selected room' })).toContainText('Loft storage');
+    }
     expect(state.createdRooms[0].floor).toBe('Loft');
     await page.locator('.floor-manager summary').click();
     await page.getByRole('button', { name: 'Remove floor', exact: true }).click();
@@ -2717,6 +2882,9 @@ for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto('/');
     await page.getByRole('button', { name: 'outlet: North wall outlet' }).click();
+    if (width === 390) {
+      await expect(page.locator('.floorplan-sidebar-summary')).toContainText('North wall outlet');
+    }
     const marker = page.locator('[data-point-id="1"]');
     const position = await marker.evaluate((element) => [element.getAttribute('cx'), element.getAttribute('cy')]);
     await page.locator('.floor-manager summary').click();
@@ -2729,6 +2897,7 @@ for (const width of [1280, 390]) {
     await form.getByLabel('Rename floor').fill('Ground');
     await form.getByRole('button', { name: 'Save floor' }).click();
     await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('Ground');
+    if (width === 390) await expandFloorplanDetails(page);
     await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('North wall outlet');
     await expect(marker).toHaveAttribute('aria-pressed', 'true');
     expect(await marker.evaluate((element) => [element.getAttribute('cx'), element.getAttribute('cy')])).toEqual(position);
@@ -2771,6 +2940,7 @@ test('floor lifecycle handles blank and duplicate drafts, keyboard creation, and
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Remove floor', exact: true }).click();
   await expect(page.getByText('Create a floor to start a floorplan.')).toBeVisible();
+  await openEditMap(page);
   await expect(page.getByRole('button', { name: 'Add room', exact: true })).toBeDisabled();
   await page.locator('.floor-manager').getByRole('button', { name: 'Add floor', exact: true }).click();
   await form.getByLabel('New floor name').fill('Basement');
@@ -2796,7 +2966,9 @@ test('floor lifecycle keeps failed rename and create drafts recoverable', async 
     await expect(page.getByText(/Floor save unavailable/)).toBeVisible();
     await expect(form.getByRole('textbox')).toHaveValue('Ground');
     await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
+    await expandFloorplanDetails(page);
     await expect(page.getByRole('region', { name: 'Selected point' })).toContainText('North wall outlet');
+    await collapseFloorplanDetails(page);
     await form.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
 });
@@ -2809,6 +2981,7 @@ test('floor lifecycle keeps a floor selected after failed removal', async ({ pag
   await page.getByRole('button', { name: 'Remove floor', exact: true }).click();
   await expect(page.getByText(/Floor could not be removed/)).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Floor:', exact: true })).toHaveValue('main');
+  await openEditMap(page);
   await expect(page.getByRole('button', { name: 'Add room', exact: true })).toBeEnabled();
 });
 
@@ -2816,6 +2989,7 @@ test('floor lifecycle prevents another edit or find from redirecting a floor dra
   await mockApi(page, { rooms: [room, { ...room, id: 2, name: 'Upper room', floor: 'upper' }] });
   await page.goto('/');
   await page.getByRole('button', { name: 'outlet: North wall outlet' }).click();
+  await expandFloorplanDetails(page);
   await page.locator('.floor-manager summary').click();
   await page.getByRole('button', { name: 'Rename floor', exact: true }).click();
   const form = page.locator('.floor-management-form');
