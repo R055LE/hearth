@@ -31,12 +31,15 @@ function App() {
     const onHashChange = () => {
       const nextTab = tabFromLocation();
       if (nextTab === tab) return;
-      const proceed = () => { setTab(nextTab); window.history.replaceState(null, '', `#${nextTab}`); };
+      const proceed = () => {
+        setTab(nextTab);
+        window.history.replaceState(null, '', `#${nextTab}`);
+        if (nextTab !== 'floorplan') setFloorplanTarget(null);
+        if (nextTab !== 'rooms') setRoomInitialFloor(null);
+      };
       window.history.replaceState(null, '', `#${tab}`);
       if (navigationGuard.current) navigationGuard.current(proceed);
       else proceed();
-      if (nextTab !== 'floorplan') setFloorplanTarget(null);
-      if (nextTab !== 'rooms') setRoomInitialFloor(null);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -58,9 +61,12 @@ function App() {
 
   return (
     <div className="app">
-      <header>
-        <h1>Hearth</h1>
-        <nav className="tabs">
+      <header className="app-header">
+        <a className="brand" href="#floorplan" onClick={() => openFloorplan()} aria-label="Hearth home">
+          <span aria-hidden="true">⌂</span>
+          <h1>Hearth</h1>
+        </a>
+        <nav className="tabs" aria-label="Main sections">
           <button
             className={tab === 'floorplan' ? 'active' : ''}
             aria-current={tab === 'floorplan' ? 'page' : undefined}

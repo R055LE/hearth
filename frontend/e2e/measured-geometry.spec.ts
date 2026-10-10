@@ -51,6 +51,8 @@ async function openEditor(page: Page, id = 1) {
   await page.goto('/');
   await page.locator(`[data-room-id="${id}"]`).focus();
   await page.keyboard.press('Enter');
+  const expand = page.getByRole('button', { name: 'Expand details' });
+  if (await expand.count()) await expand.click();
   await page.getByRole('button', { name: 'Open geometry editor' }).click();
   await expect(page.getByRole('heading', { name: 'Edit geometry for Measured room' })).toBeVisible();
 }
@@ -72,7 +74,7 @@ test('measured editor preserves exact source, selection, floor and viewport at 3
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.getByRole('button', { name: 'Save room', exact: true }).focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('region', { name: 'Selected room' })).toBeVisible();
+  await expect(page.locator('.floorplan-sidebar-summary')).toContainText('Measured room');
   expect(state.patches).toHaveLength(1);
   expect(Object.keys(state.patches[0]).sort()).toEqual(['measurement_source', 'polygon']);
   expect(state.patches[0].measurement_source).toEqual({ ...source, start: { ...source.start, x: 3.025 } });
@@ -80,6 +82,7 @@ test('measured editor preserves exact source, selection, floor and viewport at 3
   await expect(page.locator('[data-room-id="1"]')).toBeFocused();
   await page.reload();
   await page.locator('[data-room-id="1"]').press('Enter');
+  await page.getByRole('button', { name: 'Expand details' }).click();
   await page.getByRole('button', { name: 'Open geometry editor' }).click();
   await expect(page.getByRole('spinbutton', { name: 'X (ft):', exact: true })).toHaveValue('3.025');
 });

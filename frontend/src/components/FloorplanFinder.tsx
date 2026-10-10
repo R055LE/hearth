@@ -1,17 +1,5 @@
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useMemo, useState } from 'react';
 import type { Circuit, CircuitPoint, Panel, Room } from '../types';
-
-const NARROW_SCREEN = '(max-width: 700px)';
-
-function subscribeToScreenSize(onChange: () => void) {
-  const media = window.matchMedia(NARROW_SCREEN);
-  media.addEventListener('change', onChange);
-  return () => media.removeEventListener('change', onChange);
-}
-
-function isNarrowScreen() {
-  return window.matchMedia(NARROW_SCREEN).matches;
-}
 
 export type FloorplanFindTarget =
   | { type: 'room'; id: number }
@@ -47,10 +35,7 @@ export function FloorplanFinder({
   loading: boolean;
   onSelect: (target: FloorplanFindTarget) => void;
 }) {
-  const narrow = useSyncExternalStore(subscribeToScreenSize, isNarrowScreen, () => false);
-  const [expanded, setExpanded] = useState<boolean | null>(null);
   const [query, setQuery] = useState('');
-  const open = expanded ?? !narrow;
 
   const results = useMemo(() => {
     const roomsById = new Map(rooms.map((room) => [room.id, room]));
@@ -139,22 +124,14 @@ export function FloorplanFinder({
   return (
     <section className="floorplan-finder" aria-label="Find floorplan items">
       <div className="floorplan-finder-heading">
-        <h3>Find</h3>
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls="floorplan-find-content"
-          onClick={() => setExpanded(!open)}
-        >
-          {open ? 'Close find' : 'Open find'}
-        </button>
+        <h3>Find anything</h3>
       </div>
-      {open && (
-        <div id="floorplan-find-content">
+      <div id="floorplan-find-content">
           <label htmlFor="floorplan-find-query">Room, point, panel, breaker, or verified description</label>
           <input
             id="floorplan-find-query"
             type="search"
+            placeholder="Search rooms, points, panels, or breakers"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             autoComplete="off"
@@ -186,8 +163,7 @@ export function FloorplanFinder({
               ))}
             </ul>
           )}
-        </div>
-      )}
+      </div>
     </section>
   );
 }

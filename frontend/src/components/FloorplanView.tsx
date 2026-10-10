@@ -319,8 +319,11 @@ export function FloorplanView({
     target: FloorplanFindTarget;
     floor: string;
   } | null>(null);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const [leaveConfirmationOpen, setLeaveConfirmationOpen] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
   const pointDetailsRef = useRef<HTMLDivElement>(null);
+  const detailsToggleRef = useRef<HTMLButtonElement>(null);
   const pointChoicesRef = useRef<HTMLDivElement>(null);
   const findConfirmationRef = useRef<HTMLDivElement>(null);
   const pointerPositions = useRef(new Map<number, PointerPosition>());
@@ -331,11 +334,17 @@ export function FloorplanView({
   const roomPlacement = useRef<{ pointerId: number; startClientX: number; startClientY: number } | null>(null);
   const pointPlacement = useRef<{ pointerId: number; startClientX: number; startClientY: number } | null>(null);
   const suppressMapClick = useRef(false);
+  const hadDraftPoint = useRef(false);
+  const leaveContinuation = useRef<(() => void) | null>(null);
+  const leaveFocus = useRef<HTMLElement | null>(null);
+  const leaveWasExpanded = useRef(false);
+  const findWasExpanded = useRef(false);
+  const leaveConfirmationRef = useRef<HTMLDivElement>(null);
 
   function revealPointDetails() {
     if (!window.matchMedia('(max-width: 700px)').matches) return;
-    pointDetailsRef.current?.focus({ preventScroll: true });
-    pointDetailsRef.current?.scrollIntoView({ block: 'start' });
+    setDetailsExpanded(false);
+    requestAnimationFrame(() => detailsToggleRef.current?.focus({ preventScroll: true }));
   }
 
   useEffect(() => {
@@ -348,11 +357,13 @@ export function FloorplanView({
   }, [pointChoiceIds]);
 
   function returnToPoint(pointId: number | null) {
-    const marker = svgRef.current?.querySelector<SVGCircleElement>(
-      `[data-point-id="${pointId}"]`,
-    );
-    marker?.focus({ preventScroll: true });
-    marker?.scrollIntoView({ block: 'center' });
+    setDetailsExpanded(false);
+    requestAnimationFrame(() => {
+      const marker = svgRef.current?.querySelector<SVGCircleElement>(
+        `[data-point-id="${pointId}"]`,
+      );
+      marker?.focus({ preventScroll: true });
+    });
   }
 
   const floors = allFloors.map((item) => item.name);
@@ -893,12 +904,53 @@ export function FloorplanView({
     setRoomDraft(null);
     setMeasuredRoom(null);
     setWallPreview(null);
+    setDetailsExpanded(false);
   }
 
   function finishWalk() {
     if (walkCircuitId !== '') setSelectedCircuitId(walkCircuitId);
     setWalkCreatedIds([]);
     finishInteraction();
+  }
+
+  function requestDraftLeave(proceed: () => void, focusTarget?: HTMLElement | null) {
+    if (saving) return;
+    if (!roomDraft && !draftPoint) {
+      proceed();
+      return;
+    }
+    leaveContinuation.current = proceed;
+    leaveFocus.current = focusTarget ?? document.activeElement as HTMLElement | null;
+    leaveWasExpanded.current = detailsExpanded;
+    setPendingFindTarget(null);
+    setDetailsExpanded(false);
+    setLeaveConfirmationOpen(true);
+  }
+
+  function stayWithDraft() {
+    setLeaveConfirmationOpen(false);
+    leaveContinuation.current = null;
+    setDetailsExpanded(leaveWasExpanded.current);
+    requestAnimationFrame(() => leaveFocus.current?.focus());
+  }
+
+  async function saveAndLeaveDraft() {
+    const saved = roomDraft ? await saveRoomDraft() : await saveDraft();
+    if (!saved) return;
+    if (mode === 'walk') finishWalk();
+    const proceed = leaveContinuation.current;
+    leaveContinuation.current = null;
+    setLeaveConfirmationOpen(false);
+    proceed?.();
+  }
+
+  function discardAndLeaveDraft() {
+    const proceed = leaveContinuation.current;
+    leaveContinuation.current = null;
+    setLeaveConfirmationOpen(false);
+    if (mode === 'walk') finishWalk();
+    else finishInteraction();
+    proceed?.();
   }
 
   function startAdd() {
@@ -962,6 +1014,8 @@ export function FloorplanView({
   }
 
   function showFindTarget(target: FloorplanFindTarget) {
+    const selectionFromDetails = document.activeElement?.closest('.floorplan-sidebar-body');
+    setDetailsExpanded(false);
     setPointChoiceIds(null);
     setSelectedPointId(null);
     setSelectedRoomId(null);
@@ -1007,9 +1061,13 @@ export function FloorplanView({
     } else {
       setPendingFindFocus(null);
     }
+    if (selectionFromDetails && window.matchMedia('(max-width: 700px)').matches) {
+      requestAnimationFrame(() => detailsToggleRef.current?.focus({ preventScroll: true }));
+    }
   }
 
   function chooseFindTarget(target: FloorplanFindTarget) {
+    if (saving) return;
     if (floorBusy) {
       setError(floorAction
         ? 'Save or cancel the floor draft before finding another item.'
@@ -1018,6 +1076,8 @@ export function FloorplanView({
     }
     if (measuredRoom) { wallEditor.current?.requestLeave(() => { cancelMeasured(); showFindTarget(target); }); return; }
     if (roomDraft || draftPoint) {
+      findWasExpanded.current = detailsExpanded;
+      setDetailsExpanded(false);
       setPendingFindTarget(target);
       return;
     }
@@ -1049,19 +1109,24 @@ export function FloorplanView({
     const point = plan.circuit_points.find((candidate) => candidate.id === selectedPointId);
     if (!point) return;
     const { id: _id, ...draft } = point;
+    setDetailsExpanded(true);
     setDraftPoint(draft);
     setMode(move ? 'move' : 'edit');
   }
 
-  function handleFloorChange(nextFloor: string) {
-    if (nextFloor === floor) return;
-    if (measuredRoom) { wallEditor.current?.requestLeave(() => { cancelMeasured(); setSelectedRoomId(null); setViewport(null); setFloor(nextFloor); }); return; }
+  function changeFloor(nextFloor: string) {
     if (mode === 'walk') setWalkCreatedIds([]);
     finishInteraction();
     setSelectedPointId(null);
     setSelectedRoomId(null);
     setViewport(null);
     setFloor(nextFloor);
+  }
+
+  function handleFloorChange(nextFloor: string, focusTarget?: HTMLElement | null) {
+    if (nextFloor === floor) return;
+    if (measuredRoom) { wallEditor.current?.requestLeave(() => { cancelMeasured(); setSelectedRoomId(null); setViewport(null); setFloor(nextFloor); }); return; }
+    requestDraftLeave(() => changeFloor(nextFloor), focusTarget);
   }
 
   function beginFloorAction(action: 'create' | 'rename') {
@@ -1136,6 +1201,7 @@ export function FloorplanView({
 
   function startRoomCreate() {
     if (!currentFloor) return;
+    setDetailsExpanded(true);
     const roomFloor = floor;
     const [x, y] = suggestedRectangleOrigin(
       allRooms.filter((room) => room.floor === roomFloor),
@@ -1161,6 +1227,7 @@ export function FloorplanView({
 
   function selectRoom(room: Room) {
     if (mode !== 'idle') return;
+    setDetailsExpanded(false);
     setPointChoiceIds(null);
     setSelectedRoomId(room.id);
     setSelectedPointId(null);
@@ -1178,6 +1245,7 @@ export function FloorplanView({
   }
 
   function startMeasuredEdit(room: Room) {
+    setDetailsExpanded(true);
     setViewport(visibleViewport);
     setMeasuredRoom(room);
     setWallPreview(null);
@@ -1199,6 +1267,7 @@ export function FloorplanView({
   function startRoomEdit(room: Room, resize = false) {
     const rectangle = editableRectangle(room);
     if (!rectangle) return;
+    setDetailsExpanded(true);
     setRoomDraft({
       roomId: room.id,
       name: room.name,
@@ -1282,6 +1351,7 @@ export function FloorplanView({
     setRoomDraft(null);
     setResizingRoom(false);
     setMode('idle');
+    setDetailsExpanded(false);
     setError(null);
 
     try {
@@ -1434,6 +1504,31 @@ export function FloorplanView({
     }
   }
 
+  useEffect(() => {
+    if (!navigationGuard || measuredRoom || (!roomDraft && !draftPoint)) return;
+    navigationGuard.current = (proceed) => requestDraftLeave(proceed);
+    return () => {
+      if (!measuredRoom) navigationGuard.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailsExpanded, draftPoint, measuredRoom, navigationGuard, roomDraft, saving]);
+
+  useEffect(() => {
+    if (!roomDraft && !draftPoint) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [draftPoint, roomDraft]);
+
+  useEffect(() => {
+    if (draftPoint && !hadDraftPoint.current) setDetailsExpanded(true);
+    hadDraftPoint.current = draftPoint !== null;
+  }, [draftPoint]);
+
+  useEffect(() => {
+    if (leaveConfirmationOpen) leaveConfirmationRef.current?.focus();
+  }, [leaveConfirmationOpen]);
+
   const selectedPoint = plan.circuit_points.find((p) => p.id === selectedPointId) ?? null;
   const selectedRoom = allRooms.find((room) => room.id === selectedRoomId) ?? null;
   const selectedPanel = panels.find((panel) => panel.id === selectedPanelId) ?? null;
@@ -1462,6 +1557,28 @@ export function FloorplanView({
     ...displayedPoints.filter((point) => point.id === selectedPointId),
   ];
   const markerRadius = Math.max(bounds.width, bounds.height) * 0.018;
+  const detailsTitle = measuredRoom
+    ? `Editing ${measuredRoom.name}`
+    : roomDraft
+      ? `${roomDraft.roomId == null ? 'Adding' : 'Editing'} ${roomDraft.name || 'room'}`
+      : draftPoint
+        ? `${activeEdit ? 'Editing' : mode === 'walk' ? 'Walking' : 'Adding'} ${draftPoint.label?.trim() || draftPoint.kind}`
+        : mode === 'walk'
+          ? `Circuit walk · ${walkCircuitId === '' ? 'Choose a breaker' : circuitLabel(walkCircuitId)}`
+        : selectedPoint
+          ? selectedPoint.label?.trim() || selectedPoint.kind
+          : selectedCircuit
+            ? `${selectedCircuitPanel?.name ?? 'Unknown panel'} · Breaker ${selectedCircuit.breaker_label}`
+            : selectedPanel
+              ? selectedPanel.name
+              : selectedRoom
+                ? selectedRoom.name
+                : 'Browse circuits';
+  const detailsContext = selectedPoint && !draftPoint
+    ? circuitLabel(selectedPoint.circuit_id)
+    : selectedRoom && !roomDraft
+      ? selectedRoom.floor
+      : null;
 
   return (
     <section aria-labelledby="floorplan-heading" onKeyDown={(event) => {
@@ -1475,6 +1592,37 @@ export function FloorplanView({
       >
         <div className="floorplan-main">
           {error && <p className="error">{error}</p>}
+          {leaveConfirmationOpen && (
+            <div
+              className="floorplan-find-confirmation"
+              ref={leaveConfirmationRef}
+              role="alertdialog"
+              aria-labelledby="floorplan-leave-title"
+              aria-describedby="floorplan-leave-description"
+              tabIndex={-1}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  stayWithDraft();
+                }
+              }}
+            >
+              <h3 id="floorplan-leave-title">Leave this draft?</h3>
+              <p id="floorplan-leave-description">
+                {roomDraft
+                  ? 'Save the room draft, discard it, or stay and keep editing.'
+                  : mode === 'walk'
+                    ? 'Earlier points in this walk are already saved. Save or discard only the current point draft, or stay.'
+                    : 'Save the point draft, discard it, or stay and keep editing.'}
+              </p>
+              <div className="form-actions">
+                <button type="button" onClick={saveAndLeaveDraft} disabled={saving}>Save and continue</button>
+                <button type="button" onClick={discardAndLeaveDraft} disabled={saving}>Discard and continue</button>
+                <button type="button" onClick={stayWithDraft} disabled={saving}>Stay</button>
+              </div>
+            </div>
+          )}
           <FloorplanFinder
             rooms={allRooms}
             points={allPoints}
@@ -1493,7 +1641,10 @@ export function FloorplanView({
               tabIndex={-1}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
                   setPendingFindTarget(null);
+                  setDetailsExpanded(findWasExpanded.current);
                   document.getElementById('floorplan-find-query')?.focus();
                 }
               }}
@@ -1517,6 +1668,7 @@ export function FloorplanView({
                   type="button"
                   onClick={() => {
                     setPendingFindTarget(null);
+                    setDetailsExpanded(findWasExpanded.current);
                     document.getElementById('floorplan-find-query')?.focus();
                   }}
                 >
@@ -1530,8 +1682,8 @@ export function FloorplanView({
               Floor:{' '}
               <select
                 value={floor}
-                onChange={(e) => handleFloorChange(e.target.value)}
-                disabled={(mode === 'room' && !measuredRoom) || floorBusy || floors.length === 0}
+                onChange={(e) => handleFloorChange(e.target.value, e.currentTarget)}
+                disabled={floorBusy || floors.length === 0}
               >
                 {floors.length === 0 && <option value="">No floors</option>}
                 {floors.map((f) => (
@@ -1555,21 +1707,26 @@ export function FloorplanView({
                 </button>
               </div>
             </details>
-            <button type="button" onClick={startRoomCreate} disabled={mode !== 'idle' || floorBusy || !currentFloor}>
-              Add room
-            </button>
-            <button
-              onClick={startAdd}
-              disabled={floorBusy || activeEdit || mode === 'walk' || mode === 'room' || plan.rooms.length === 0}
-            >
-              {mode === 'add' ? 'Cancel add point' : 'Add point'}
-            </button>
-            <button
-              onClick={startWalk}
-              disabled={floorBusy || activeEdit || mode === 'add' || mode === 'room' || circuits.length === 0 || plan.rooms.length === 0}
-            >
-              {mode === 'walk' ? 'Finish circuit walk' : 'Walk circuit'}
-            </button>
+            <details className="edit-map-tools">
+              <summary>Edit map</summary>
+              <div className="edit-map-actions">
+                <button type="button" onClick={startRoomCreate} disabled={mode !== 'idle' || floorBusy || !currentFloor}>
+                  Add room
+                </button>
+                <button
+                  onClick={startAdd}
+                  disabled={floorBusy || activeEdit || mode === 'walk' || mode === 'room' || plan.rooms.length === 0}
+                >
+                  {mode === 'add' ? 'Cancel add point' : 'Add point'}
+                </button>
+                <button
+                  onClick={startWalk}
+                  disabled={floorBusy || activeEdit || mode === 'add' || mode === 'room' || circuits.length === 0 || plan.rooms.length === 0}
+                >
+                  {mode === 'walk' ? 'Finish circuit walk' : 'Walk circuit'}
+                </button>
+              </div>
+            </details>
           </div>
           {floorAction && (
             <form className="floor-management-form" onSubmit={saveFloor}>
@@ -1606,7 +1763,7 @@ export function FloorplanView({
               </>}
             </div>
           ) : (
-            <>
+            <div className="floorplan-canvas">
               <div className="floorplan-navigation" role="group" aria-label="Floorplan navigation">
                 <button type="button" onClick={() => setViewport(null)}>
                   Fit
@@ -1783,7 +1940,7 @@ export function FloorplanView({
                         cy={point.y}
                         r={markerRadius}
                         fill={colorForKind(point.kind)}
-                        stroke={isSelectedCircuit ? '#f97316' : '#fff'}
+                        stroke={isSelectedCircuit ? 'var(--selection)' : 'var(--surface-raised)'}
                         strokeWidth={isSelectedPoint ? 3 : 2}
                         vectorEffect="non-scaling-stroke"
                         className="point-symbol"
@@ -1798,7 +1955,7 @@ export function FloorplanView({
                     cy={draftPoint.y}
                     r={2}
                     fill="none"
-                    stroke="#f97316"
+                    stroke="var(--selection)"
                     strokeWidth={0.5}
                     pointerEvents="none"
                   />
@@ -1858,11 +2015,29 @@ export function FloorplanView({
                   </div>
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
 
-        <div className={`floorplan-sidebar${mode === 'walk' ? ' walk-sidebar' : ''}`}>
+        <aside className={`floorplan-sidebar${mode === 'walk' ? ' walk-sidebar' : ''}${detailsExpanded ? ' expanded' : ''}`} aria-label="Floorplan details panel">
+          <div className="floorplan-sidebar-summary">
+            <div id="floorplan-details-summary" aria-live="polite">
+              <span>Details</span>
+              <strong>{detailsTitle}</strong>
+              {detailsContext && <small>{detailsContext}</small>}
+            </div>
+            <button
+              ref={detailsToggleRef}
+              type="button"
+              aria-expanded={detailsExpanded}
+              aria-controls="floorplan-sidebar-body"
+              aria-describedby="floorplan-details-summary"
+              onClick={() => setDetailsExpanded((expanded) => !expanded)}
+            >
+              {detailsExpanded ? 'Collapse details' : 'Expand details'}
+            </button>
+          </div>
+          <div className="floorplan-sidebar-body" id="floorplan-sidebar-body">
           {measuredRoom ? (
             <div className="info-card measured-room-editor">
               <h3>Edit geometry for {measuredRoom.name}</h3>
@@ -1909,17 +2084,16 @@ export function FloorplanView({
               aria-label="Selected point"
               tabIndex={-1}
             >
-              <h3>{selectedPoint.kind}</h3>
-              <p>Circuit: {circuitLabel(selectedPoint.circuit_id)}</p>
-              {selectedPoint.label && <p>{selectedPoint.label}</p>}
-              <p>Room: {allRooms.find((r) => r.id === selectedPoint.room_id)?.name}</p>
+              <h3>{selectedPoint.label?.trim() || selectedPoint.kind}</h3>
+              <p className="details-answer">Circuit: {circuitLabel(selectedPoint.circuit_id)}</p>
+              <p>{selectedPoint.kind} · {allRooms.find((r) => r.id === selectedPoint.room_id)?.name}</p>
               {selectedCircuit?.verified_description && (
                 <p>Confirmed: {selectedCircuit.verified_description}</p>
               )}
               {selectedCircuit?.panel_sticker_text && (
                 <p>Panel says: {selectedCircuit.panel_sticker_text}</p>
               )}
-              <div className="form-actions">
+              <div className="form-actions details-actions">
                 <button className="back-to-map" type="button" onClick={() => returnToPoint(selectedPointId)}>Back to map</button>
                 <button type="button" onClick={() => beginEdit(false)} disabled={floorBusy}>Edit point</button>
                 <button type="button" onClick={() => beginEdit(true)} disabled={floorBusy}>Move point</button>
@@ -2090,7 +2264,8 @@ export function FloorplanView({
               </ul>
             </>
           )}
-        </div>
+          </div>
+        </aside>
       </div>
     </section>
   );
